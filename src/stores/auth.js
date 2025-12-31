@@ -7,8 +7,6 @@ export const useAuthStore = defineStore('auth', {
     session: null,
     user: null,
     server: {
-      host: localStorage.getItem('server_host') || '',
-      port: localStorage.getItem('server_port') || '81',
       username: localStorage.getItem('username') || '',
       password: ''
     },
@@ -17,22 +15,27 @@ export const useAuthStore = defineStore('auth', {
   }),
 
   getters: {
-    baseURL: (state) => {
-      if (!state.server.host) return '';
-      const protocol = window.location.protocol;
-      return `${protocol}//${state.server.host}:${state.server.port}`;
+    baseURL: () => {
+      // L'URL est maintenant gérée par le proxy Vite
+      // Pas besoin de construire l'URL manuellement
+      return '';
     }
   },
 
   actions: {
     async login(credentials) {
       try {
-        const { host, port, username, password, rememberMe } = credentials;
+        const { username, password, rememberMe } = credentials;
         
-        const baseURL = `${window.location.protocol}//${host}:${port}`;
-        this.apiClient = new BlueIrisAPI(baseURL, username, password);
+        console.log('🚀 Démarrage du processus de connexion...', { username });
         
+        // Le proxy Vite gère l'URL du serveur Blue Iris
+        this.apiClient = new BlueIrisAPI('', username, password);
+        
+        console.log('📡 Client API créé, appel de login...');
         const result = await this.apiClient.login();
+        
+        console.log('📥 Résultat de login:', result);
         
         if (result.success) {
           this.isAuthenticated = true;
@@ -42,18 +45,16 @@ export const useAuthStore = defineStore('auth', {
             admin: result.data?.admin || false
           };
           
-          this.server = { host, port, username, password: '' };
+          this.server = { username, password: rememberMe ? password : '' };
           
           // Sauvegarder si "se souvenir"
           if (rememberMe) {
-            localStorage.setItem('server_host', host);
-            localStorage.setItem('server_port', port);
             localStorage.setItem('username', username);
+            localStorage.setItem('password', btoa(password)); // Encoder en base64
             localStorage.setItem('remember_me', 'true');
           } else {
-            localStorage.removeItem('server_host');
-            localStorage.removeItem('server_port');
             localStorage.removeItem('username');
+            localStorage.removeItem('password');
             localStorage.removeItem('remember_me');
           }
           

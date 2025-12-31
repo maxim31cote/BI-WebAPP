@@ -9,8 +9,11 @@ class BlueIrisAPI {
     this.session = null;
     this.response = null;
     
+    // Utiliser le proxy local en développement, l'URL directe en production
+    const apiURL = import.meta.env.DEV ? '/api' : baseURL;
+    
     this.client = axios.create({
-      baseURL: baseURL,
+      baseURL: apiURL,
       timeout: 10000,
       headers: {
         'Content-Type': 'application/json'
@@ -20,23 +23,41 @@ class BlueIrisAPI {
 
   async login() {
     try {
+      console.log('🔑 Tentative de connexion...', { baseURL: this.client.defaults.baseURL });
+      
       // Étape 1: Obtenir la session
       const loginResponse = await this.client.post('/json', {
         cmd: 'login'
       });
 
-      if (loginResponse.data.result !== 'fail') {
+      console.log('📋 Réponse session:', loginResponse.data);
+
+      // Blue Iris retourne toujours 'fail' à la première requête avec la session
+      if (loginResponse.data.session) {
         this.session = loginResponse.data.session;
-        this.response = loginResponse.data.response;
+        this.response = loginResponse.data.response || '';
 
         // Étape 2: Se connecter avec les credentials
-        const passwordHash = md5(`${this.username}:${this.session}:${md5(this.password)}`);
+        // Blue Iris utilise: md5(username:session:password) - PASSWORD EN CLAIR !
+        // Si response est vide, utiliser la session
+        const salt = this.response || this.session;
+        const passwordHash = md5(`${this.username}:${salt}:${this.password}`);
+        
+        console.log('🔐 Tentative d\'authentification avec hash...', {
+          username: this.username,
+          session: this.session,
+          responseSalt: this.response,
+          usedSalt: salt,
+          finalHash: passwordHash
+        });
         
         const authResponse = await this.client.post('/json', {
           cmd: 'login',
           session: this.session,
           response: passwordHash
         });
+
+        console.log('✅ Réponse authentification:', authResponse.data);
 
         if (authResponse.data.result === 'success') {
           return {
@@ -47,11 +68,13 @@ class BlueIrisAPI {
         }
       }
 
+      console.error('❌ Échec de l\'authentification');
       return {
         success: false,
         error: 'Authentication failed'
       };
     } catch (error) {
+      console.error('❌ Erreur lors de la connexion:', error);
       return {
         success: false,
         error: error.message
@@ -191,17 +214,14 @@ class BlueIrisAPI {
   }
 
   getStreamURL(camera, quality = 'high') {
-    const qualityMap = {
-      low: 1,
-      medium: 5,
-      high: 100
-    };
-    
-    return `${this.baseURL}/h264/${camera}/temp.m3u8?session=${this.session}&q=${qualityMap[quality]}`;
+    // Blue Iris endpoint /video/ avec les mêmes paramètres qu'UI3 pour JMuxer
+    // video/mpeg stream avec paramètres de haute qualité
+    return `/video/${camera}/2.0?session=${this.session}&audio=0&stream=0&w=1920&h=1080&q=23&kbps=1000&gop=1000&zfl=1&preset=1&vcs=3&rc=0&extend=2`;
   }
 
   getSnapshotURL(camera, width = 640, height = 480) {
-    return `${this.baseURL}/image/${camera}?session=${this.session}&w=${width}&h=${height}`;
+    // Utiliser un chemin relatif pour passer par le proxy Vite
+    return `/image/${camera}?session=${this.session}&w=${width}&h=${height}`;
   }
 
   async logout() {

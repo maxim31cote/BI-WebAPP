@@ -70,12 +70,13 @@
           </svg>
         </button>
 
-        <video
-          ref="videoPlayer"
+        <video 
+          ref="videoPlayer" 
           class="video-player"
           autoplay
-          muted
           playsinline
+          muted
+          controls
         ></video>
 
         <div class="camera-info">
@@ -110,12 +111,12 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watchEffect, nextTick } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useCamerasStore } from '../stores/cameras';
 import { useAuthStore } from '../stores/auth';
 import { useSettingsStore } from '../stores/settings';
-import Hls from 'hls.js';
+import JMuxer from 'jmuxer';
 
 const { t } = useI18n();
 const camerasStore = useCamerasStore();
@@ -126,7 +127,7 @@ const loading = ref(false);
 const error = ref('');
 const showPTZ = ref(false);
 const videoPlayer = ref(null);
-const hls = ref(null);
+const jmuxer = ref(null);
 const serverStatus = ref(null);
 const statusInterval = ref(null);
 
@@ -154,11 +155,15 @@ const selectCamera = (camera) => {
 };
 
 const clearSelection = () => {
-  camerasStore.clearSelection();
-  if (hls.value) {
-    hls.value.destroy();
-    hls.value = null;
+  if (jmuxer.value) {
+    jmuxer.value.destroy();
+    jmuxer.value = null;
   }
+  if (videoPlayer.value) {
+    videoPlayer.value.pause();
+    videoPlayer.value.src = '';
+  }
+  camerasStore.clearSelection();
 };
 
 const togglePTZ = () => {
@@ -194,29 +199,97 @@ const updateServerStatus = async () => {
   }
 };
 
-// Initialiser le lecteur vidéo HLS
-watch(selectedCamera, async (newCamera) => {
-  if (newCamera && videoPlayer.value) {
-    await nextTick();
+// Initialiser jmuxer pour Blue Iris MPEG streaming avec MSE
+watchEffect((onCleanup) => {
+  // Capturer les valeurs immédiatement pour éviter les re-déclenchements
+  const camera = selectedCamera.value;
+  const player = videoPlayer.value;
+  
+  console.log('📹 WatchEffect triggered:', { camera, hasPlayer: !!player });
+  
+  if (!camera || !player) {
+    console.log('⚠️ Missing camera or player, skipping');
+    return;
+  }
+  
+  // Utiliser les valeurs capturées, pas les refs
+  (async () => {
+    const streamURL = camerasStore.getStreamURL(camera, settingsStore.videoQuality);
+    console.log('🎥 Stream URL:', streamURL);
     
-    const streamURL = camerasStore.getStreamURL(newCamera, settingsStore.videoQuality);
+    // Détruire l'instance jmuxer précédente
+    if (jmuxer.value) {
+      jmuxer.value.destroy();
+      jmuxer.value = null;
+    }
     
-    if (Hls.isSupported()) {
-      if (hls.value) {
-        hls.value.destroy();
-      }
-      
-      hls.value = new Hls({
-        enableWorker: true,
-        lowLatencyMode: true
+    console.log('✨ Creating JMuxer instance');
+    
+    loading.value = true;
+    
+    // Initialiser JMuxer avec configuration Blue Iris
+    jmuxer.value = new JMuxer({
+      node: player,
+      mode: 'video',
+      flushingTime: 500,
+      fps: 30,
+      debug: false
+    });
+    
+    // Streamer les données MPEG via fetch
+    console.log('📡 Starting MPEG stream fetch');
+    
+    const controller = new AbortController();
+    
+    // Cleanup sur changement de caméra
+    onCleanup(() => {
+      console.log('🧹 Cleaning up stream');
+      controller.abort();
+    });
+    
+    try {
+      const response = await fetch(streamURL, {
+        signal: controller.signal
       });
       
-      hls.value.loadSource(streamURL);
-      hls.value.attachMedia(videoPlayer.value);
-    } else if (videoPlayer.value.canPlayType('application/vnd.apple.mpegurl')) {
-      videoPlayer.value.src = streamURL;
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      
+      console.log('✅ Stream connected');
+      
+      const reader = response.body.getReader();
+      let chunkCount = 0;
+      
+      while (true) {
+        const { done, value } = await reader.read();
+        
+        if (done) {
+          console.log('✅ Stream ended');
+          break;
+        }
+        
+        chunkCount++;
+        
+        // Envoyer les chunks MPEG bruts à jmuxer
+        if (jmuxer.value && value && value.byteLength > 0) {
+          jmuxer.value.feed({
+            video: value  // value est déjà un Uint8Array
+          });
+          
+          // Cacher le loading après le premier chunk valide
+          if (chunkCount === 1) {
+            console.log(`✅ First chunk received: ${value.byteLength} bytes`);
+            loading.value = false;
+          }
+        }
+      }
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        console.error('❌ Stream error:', err);
+      }
     }
-  }
+  })(); // Exécuter la fonction async immédiatement
 });
 
 onMounted(async () => {
@@ -230,9 +303,12 @@ onMounted(async () => {
 
 onUnmounted(() => {
   camerasStore.stopAutoUpdate();
-  if (hls.value) {
-    hls.value.destroy();
+  
+  if (jmuxer.value) {
+    jmuxer.value.destroy();
+    jmuxer.value = null;
   }
+  
   if (statusInterval.value) {
     clearInterval(statusInterval.value);
   }
@@ -384,6 +460,7 @@ onUnmounted(() => {
 .video-player {
   width: 100%;
   height: 100%;
+  background: #000;
   object-fit: contain;
 }
 

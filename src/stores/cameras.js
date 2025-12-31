@@ -12,7 +12,14 @@ export const useCamerasStore = defineStore('cameras', {
 
   getters: {
     activeCameras: (state) => {
-      return state.cameras.filter(cam => !cam.hidden && cam.enabled);
+      // Les caméras avec optionValue commençant par + ou @ sont des groupes
+      // Filtrer les caméras individuelles qui sont actives
+      return state.cameras.filter(cam => 
+        !cam.optionValue?.startsWith('+') && 
+        !cam.optionValue?.startsWith('@') &&
+        !cam.hidden && 
+        cam.isEnabled !== false
+      );
     },
     
     cameraById: (state) => {
@@ -62,11 +69,9 @@ export const useCamerasStore = defineStore('cameras', {
         const result = await authStore.apiClient.getStatus();
         
         if (result.success && result.status) {
-          // Mettre à jour les statuts des caméras
-          this.cameras = this.cameras.map(camera => {
-            const status = result.status.find(s => s.optionValue === camera.optionValue);
-            return status ? { ...camera, ...status } : camera;
-          });
+          // Blue Iris retourne un objet avec des propriétés de caméra, pas un tableau
+          // On va juste ignorer cette mise à jour pour l'instant
+          console.log('Status update:', result.status);
         }
       } catch (error) {
         console.error('Failed to fetch status:', error);

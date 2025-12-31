@@ -10,28 +10,6 @@
 
       <form @submit.prevent="handleLogin" class="login-form">
         <div class="form-group">
-          <label>{{ t('login.server') }}</label>
-          <input
-            v-model="form.host"
-            type="text"
-            class="input"
-            :placeholder="t('login.serverPlaceholder')"
-            required
-          />
-        </div>
-
-        <div class="form-group">
-          <label>{{ t('login.port') }}</label>
-          <input
-            v-model="form.port"
-            type="number"
-            class="input"
-            placeholder="81"
-            required
-          />
-        </div>
-
-        <div class="form-group">
           <label>{{ t('login.username') }}</label>
           <input
             v-model="form.username"
@@ -39,6 +17,7 @@
             class="input"
             :placeholder="t('login.username')"
             required
+            autocomplete="username"
           />
         </div>
 
@@ -85,8 +64,6 @@ const router = useRouter();
 const authStore = useAuthStore();
 
 const form = ref({
-  host: '',
-  port: '81',
   username: '',
   password: '',
   rememberMe: false
@@ -95,15 +72,22 @@ const form = ref({
 const loading = ref(false);
 const error = ref('');
 
-onMounted(() => {
+onMounted(async () => {
   // Charger les valeurs sauvegardées
+  const savedPassword = localStorage.getItem('password');
+  const rememberMe = authStore.rememberMe;
+  
   form.value = {
-    host: authStore.server.host || '',
-    port: authStore.server.port || '81',
     username: authStore.server.username || '',
-    password: '',
-    rememberMe: authStore.rememberMe
+    password: savedPassword && rememberMe ? atob(savedPassword) : '',
+    rememberMe: rememberMe
   };
+  
+  // Connexion automatique si "se souvenir" est activé et qu'on a les informations
+  if (rememberMe && form.value.username && form.value.password) {
+    console.log('🔐 Connexion automatique...');
+    await handleLogin();
+  }
 });
 
 const handleLogin = async () => {
