@@ -134,18 +134,29 @@ class BlueIrisAPI {
     }
   }
 
-  async getClips(camera = null, startDate = null, endDate = null) {
+  async getClips(cmd = 'cliplist', view = 'all', camera = null, startDate = null, endDate = null) {
     try {
       const params = {
-        cmd: 'cliplist',
-        session: this.session
+        cmd: cmd, // 'cliplist' ou 'alertlist'
+        session: this.session,
+        camera: camera || 'index', // 'index' pour toutes les caméras (comme UI3)
+        view: view // 'all', 'alerts', 'confirmed', 'cancelled', 'flagged'
       };
 
-      if (camera) params.camera = camera;
-      if (startDate) params.start = startDate;
-      if (endDate) params.end = endDate;
+      // Ajouter les dates si fournies, sinon dernières 24h
+      if (startDate && endDate) {
+        params.startdate = startDate;
+        params.enddate = endDate;
+      } else {
+        const now = Math.floor(Date.now() / 1000);
+        params.startdate = now - 86400;
+        params.enddate = now;
+      }
 
       const response = await this.client.post('/json', params);
+
+      console.log('📹 Request:', params);
+      console.log('📹 Response:', response.data);
 
       if (response.data.result === 'success') {
         return {
@@ -213,10 +224,12 @@ class BlueIrisAPI {
     }
   }
 
-  getStreamURL(camera, quality = 'high') {
-    // Blue Iris endpoint /video/ avec les mêmes paramètres qu'UI3 pour JMuxer
-    // video/mpeg stream avec paramètres de haute qualité
-    return `/video/${camera}/2.0?session=${this.session}&audio=0&stream=0&w=1920&h=1080&q=23&kbps=1000&gop=1000&zfl=1&preset=1&vcs=3&rc=0&extend=2`;
+  getStreamURL(camera, quality = 'high', audio = true) {
+    // vcs=3 : Codec natif (H.264 ou H.265) avec protocol Blue Iris
+    // Notre JMuxer modifié (de UI3) supporte H.265 !
+    // audio=2 : AAC (compatible JMuxer), audio=1 : μ-law (incompatible), audio=0 : pas d'audio
+    const audioParam = audio ? '2' : '0';
+    return `/video/${camera}/2.0?session=${this.session}&audio=${audioParam}&stream=0&w=1920&h=1080&q=23&kbps=1000&gop=1000&zfl=1&preset=1&vcs=3&rc=0&extend=2`;
   }
 
   getSnapshotURL(camera, width = 640, height = 480) {

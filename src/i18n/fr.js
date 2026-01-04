@@ -25,6 +25,7 @@ export default {
     noCameras: 'Aucune caméra trouvée',
     offline: 'Hors ligne',
     loading: 'Chargement...',
+    connecting: 'Connexion au flux...',
     fps: 'IPS',
     recording: 'Enregistrement',
     triggered: 'Déclenchée'

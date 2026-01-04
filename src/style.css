@@ -123,12 +123,17 @@ body {
 }
 
 .btn-icon {
-  width: 48px;
-  height: 48px;
+  width: 32px;
+  height: 32px;
   padding: 0;
   border-radius: 50%;
   background: var(--color-surface);
   color: var(--color-accent);
+}
+
+.btn-icon svg {
+  width: 18px;
+  height: 18px;
 }
 
 .input {

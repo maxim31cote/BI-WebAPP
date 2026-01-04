@@ -25,6 +25,7 @@ export default {
     noCameras: 'No cameras found',
     offline: 'Offline',
     loading: 'Loading...',
+    connecting: 'Connecting to stream...',
     fps: 'FPS',
     recording: 'Recording',
     triggered: 'Triggered'

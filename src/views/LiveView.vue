@@ -70,14 +70,43 @@
           </svg>
         </button>
 
-        <video 
-          ref="videoPlayer" 
-          class="video-player"
-          autoplay
-          playsinline
-          muted
-          controls
-        ></video>
+        <div class="video-container">
+          <div v-if="streamLoading" class="stream-loading">
+            <div class="spinner"></div>
+            <p>{{ t('live.connecting') }}</p>
+          </div>
+          
+          <video 
+            ref="videoPlayer" 
+            class="video-player"
+            autoplay
+            playsinline
+            muted
+          ></video>
+
+          <div class="video-controls">
+            <button @click="toggleAudio" class="btn-audio" :class="{ active: audioEnabled }">
+              <svg v-if="audioEnabled" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/>
+                <path d="M14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>
+              </svg>
+              <svg v-else xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/>
+              </svg>
+            </button>
+            <div v-if="audioEnabled" class="volume-control">
+              <input 
+                type="range" 
+                min="0" 
+                max="100" 
+                :value="audioVolume * 100" 
+                @input="updateVolume($event.target.value)"
+                class="volume-slider"
+              />
+              <span class="volume-label">{{ Math.round(audioVolume * 100) }}%</span>
+            </div>
+          </div>
+        </div>
 
         <div class="camera-info">
           <h2>{{ selectedCameraData?.optionDisplay }}</h2>
@@ -111,12 +140,13 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watchEffect, nextTick } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useCamerasStore } from '../stores/cameras';
 import { useAuthStore } from '../stores/auth';
 import { useSettingsStore } from '../stores/settings';
-import JMuxer from 'jmuxer';
+import JMuxer from '../utils/jmuxer-wrapper.js'; // JMuxer UI3 avec support H.265
+import BlueIrisParser from '../utils/blueIrisParser';
 
 const { t } = useI18n();
 const camerasStore = useCamerasStore();
@@ -124,12 +154,14 @@ const authStore = useAuthStore();
 const settingsStore = useSettingsStore();
 
 const loading = ref(false);
+const streamLoading = ref(false);
 const error = ref('');
 const showPTZ = ref(false);
 const videoPlayer = ref(null);
-const jmuxer = ref(null);
 const serverStatus = ref(null);
 const statusInterval = ref(null);
+const audioEnabled = ref(false);
+const audioVolume = ref(0.8);
 
 const activeCameras = computed(() => camerasStore.activeCameras);
 const selectedCamera = computed(() => camerasStore.selectedCamera);
@@ -155,15 +187,46 @@ const selectCamera = (camera) => {
 };
 
 const clearSelection = () => {
-  if (jmuxer.value) {
-    jmuxer.value.destroy();
-    jmuxer.value = null;
-  }
+  console.log('🧹 Clearing selection...');
+  
+  // Clear video player
   if (videoPlayer.value) {
     videoPlayer.value.pause();
     videoPlayer.value.src = '';
   }
+  
+  // The watchEffect cleanup will handle jmuxer and abortControllers
   camerasStore.clearSelection();
+};
+
+const toggleAudio = () => {
+  audioEnabled.value = !audioEnabled.value;
+  console.log('🔊 Audio toggled:', audioEnabled.value);
+  
+  // Si on désactive l'audio, on arrête juste le player sans recharger
+  if (!audioEnabled.value) {
+    console.log('🔇 Disabling audio only...');
+    // Le watchEffect va se réexécuter et ne pas créer de nouveau pcmPlayer
+    // On force juste un nouveau cycle pour nettoyer l'audio
+    const currentCamera = selectedCamera.value;
+    if (currentCamera) {
+      // Juste déclencher un nouveau watchEffect cycle
+      camerasStore.clearSelection();
+      nextTick(() => {
+        camerasStore.selectCamera(currentCamera);
+      });
+    }
+  } else {
+    // Si on active l'audio, on doit recharger avec le nouveau pcmPlayer
+    console.log('🔊 Enabling audio...');
+    const currentCamera = selectedCamera.value;
+    if (currentCamera) {
+      camerasStore.clearSelection();
+      nextTick(() => {
+        camerasStore.selectCamera(currentCamera);
+      });
+    }
+  }
 };
 
 const togglePTZ = () => {
@@ -199,97 +262,383 @@ const updateServerStatus = async () => {
   }
 };
 
-// Initialiser jmuxer pour Blue Iris MPEG streaming avec MSE
-watchEffect((onCleanup) => {
-  // Capturer les valeurs immédiatement pour éviter les re-déclenchements
+const updateVolume = (value) => {
+  audioVolume.value = value / 100;
+  if (gainNode) {
+    gainNode.gain.value = audioVolume.value;
+  }
+};
+
+// Streaming avec BlueIrisParser + JMuxer (comme UI3)
+let jmuxer = null;
+let abortController = null;
+let parser = null;
+let currentCamera = null;
+let isStreamActive = false;
+let audioContext = null;
+let gainNode = null;
+let audioQueue = [];
+let nextPlayTime = 0;
+let decoderState = { lastReceivedAudioIndex: -1, nextPlayAudioIndex: 0, buffers: [] };
+
+// Fonction pour jouer les buffers décodés dans l'ordre (comme UI3's PlayDecodedAudio)
+const playDecodedAudio = () => {
+  for (let i = 0; i < decoderState.buffers.length; i++) {
+    if (decoderState.buffers[i].index === decoderState.nextPlayAudioIndex) {
+      decoderState.nextPlayAudioIndex++;
+      const audioBuffer = decoderState.buffers[i].buffer;
+      decoderState.buffers.splice(i, 1);
+      
+      // Resume le contexte s'il est suspendu (comme UI3)
+      if (audioContext.state === 'suspended') {
+        audioContext.resume();
+      }
+      
+      // Créer source node et connecter via GainNode pour le contrôle du volume
+      const source = audioContext.createBufferSource();
+      source.buffer = audioBuffer;
+      
+      if (!gainNode) {
+        gainNode = audioContext.createGain();
+        gainNode.gain.value = audioVolume.value;
+        gainNode.connect(audioContext.destination);
+      }
+      
+      source.connect(gainNode);
+      
+      // Timing avec buffer initial (comme UI3)
+      const currentTime = audioContext.currentTime;
+      const duration = audioBuffer.duration;
+      
+      if (nextPlayTime === 0) {
+        nextPlayTime = currentTime + 0.2; // Buffer initial 200ms
+      }
+      
+      const offset = currentTime - nextPlayTime;
+      const maxDelayMs = 0.7; // 700ms max
+      
+      if (offset > 0) {
+        // Frame en retard
+        nextPlayTime = currentTime;
+      } else if (offset < -1 * maxDelayMs) {
+        // Buffer trop plein, drop
+        playDecodedAudio(); // Récursif pour jouer la suivante
+        return;
+      }
+      
+      source.start(nextPlayTime);
+      nextPlayTime += duration;
+      
+      playDecodedAudio(); // Récursif au cas où la suivante est déjà là
+      return;
+    }
+  }
+};
+
+// Fonction pour décoder et jouer FLAC (comme UI3's DecodeAndPlayAudioData)
+const decodeAndPlayFlac = (audioData, sampleRate) => {
+  if (!audioContext) {
+    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate });
+  }
+  
+  // Si le sampleRate change, recréer le context
+  if (audioContext.sampleRate !== sampleRate) {
+    audioContext.close();
+    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate });
+    gainNode = null; // Reset aussi le GainNode car il appartient à l'ancien contexte
+    nextPlayTime = 0;
+    decoderState = { lastReceivedAudioIndex: -1, nextPlayAudioIndex: 0, buffers: [] };
+  }
+  
+  decoderState.lastReceivedAudioIndex++;
+  const myIndex = decoderState.lastReceivedAudioIndex;
+  
+  // Décoder FLAC avec Web Audio API (comme UI3)
+  audioContext.decodeAudioData(
+    audioData.buffer,
+    (audioBuffer) => {
+      // Ajouter à la queue avec son index
+      decoderState.buffers.push({ buffer: audioBuffer, index: myIndex });
+      // Essayer de jouer dans l'ordre
+      playDecodedAudio();
+    },
+    (error) => {
+      console.error('❌ FLAC decode error:', error);
+    }
+  );
+};
+
+// Fonction pour démarrer/redémarrer le stream (comme UI3's ReopenStreamAtCurrentSeekPosition)
+const startStream = async () => {
   const camera = selectedCamera.value;
   const player = videoPlayer.value;
+  const hasAudio = audioEnabled.value;
   
-  console.log('📹 WatchEffect triggered:', { camera, hasPlayer: !!player });
+  console.log('📹 Starting stream:', { camera, hasAudio, hasPlayer: !!player });
   
   if (!camera || !player) {
     console.log('⚠️ Missing camera or player, skipping');
+    if (abortController) {
+      try {
+        abortController.abort();
+      } catch (e) {}
+      abortController = null;
+    }
+    isStreamActive = false;
     return;
   }
   
-  // Utiliser les valeurs capturées, pas les refs
-  (async () => {
-    const streamURL = camerasStore.getStreamURL(camera, settingsStore.videoQuality);
-    console.log('🎥 Stream URL:', streamURL);
-    
-    // Détruire l'instance jmuxer précédente
-    if (jmuxer.value) {
-      jmuxer.value.destroy();
-      jmuxer.value = null;
-    }
-    
-    console.log('✨ Creating JMuxer instance');
-    
-    loading.value = true;
-    
-    // Initialiser JMuxer avec configuration Blue Iris
-    jmuxer.value = new JMuxer({
-      node: player,
-      mode: 'video',
-      flushingTime: 500,
-      fps: 30,
-      debug: false
-    });
-    
-    // Streamer les données MPEG via fetch
-    console.log('📡 Starting MPEG stream fetch');
-    
-    const controller = new AbortController();
-    
-    // Cleanup sur changement de caméra
-    onCleanup(() => {
-      console.log('🧹 Cleaning up stream');
-      controller.abort();
-    });
-    
-    try {
-      const response = await fetch(streamURL, {
-        signal: controller.signal
-      });
-      
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+  streamLoading.value = true;
+  currentCamera = camera;
+  isStreamActive = true;
+  
+  // Comme UI3: vcs=3, audio=0 ou 1 selon le toggle
+  const streamURL = camerasStore.getStreamURL(camera, settingsStore.videoQuality, hasAudio);
+  console.log('🎥 Stream URL (UI3 mode):', streamURL);
+  
+  // Cleanup précédent
+  if (abortController) {
+    console.log('🛑 Aborting previous stream...');
+    abortController.abort();
+    abortController = null;
+  }
+  
+  if (jmuxer) {
+    console.log('🧹 Destroying previous JMuxer...');
+    jmuxer.destroy();
+    jmuxer = null;
+  }
+  
+  if (audioContext && !hasAudio) {
+    console.log('🧹 Closing AudioContext...');
+    audioContext.close();
+    audioContext = null;
+    gainNode = null;
+    nextPlayTime = 0;
+    decoderState = { lastReceivedAudioIndex: -1, nextPlayAudioIndex: 0, buffers: [] };
+  }
+  
+  if (parser) {
+    parser.reset();
+  }
+  
+  // Attendre que Blue Iris ferme les connexions précédentes
+  await new Promise(resolve => setTimeout(resolve, 500));
+  
+  // Variables pour le buffering UI3-style (RÉINITIALISÉES à chaque nouveau stream)
+  let lastFrame = null;
+  let lastFrameDuration = 33;
+  let mseReady = false;
+  let earlyFrames = [];
+  let audioFramesQueued = [];
+  
+  // Créer le parser Blue Iris (comme UI3)
+  parser = new BlueIrisParser(
+    // onVideoFrame
+    (frame) => {
+      if (!jmuxer) {
+        // Créer JMuxer à la première frame (comme UI3)
+        console.log(`🎬 Initializing JMuxer with codec: ${frame.codec}`);
+        
+        jmuxer = new JMuxer({
+          node: player,
+          mode: 'video', // Toujours 'video', l'audio FLAC est géré par Web Audio API
+          videoCodec: frame.codec, // "H264" ou "H265" (garde la casse)
+          maxDelay: 1000,
+          flushingTime: 0,
+          clearBuffer: true,
+          debug: false,
+          onReady: () => {
+            console.log('✅ MSE Ready');
+            mseReady = true;
+            streamLoading.value = false;
+            // Unmute le player si audio activé
+            if (hasAudio && player) {
+              player.muted = false;
+              player.volume = 1.0;
+              console.log('🔊 Audio enabled in player');
+            }
+            // Feed les VIDEO frames mises en queue
+            while (earlyFrames.length > 0) {
+              const earlyFrame = earlyFrames.shift();
+              feedFrame(earlyFrame);
+            }
+            // Feed les AUDIO frames mises en queue
+            if (hasAudio) {
+              while (audioFramesQueued.length > 0) {
+                const audioFrame = audioFramesQueued.shift();
+                jmuxer.feed({
+                  audio: audioFrame.frameData
+                });
+              }
+            }
+          },
+          onError: (err) => {
+            console.error('❌ JMuxer error:', err);
+            streamLoading.value = false;
+          }
+        });
       }
       
-      console.log('✅ Stream connected');
+      if (!mseReady) {
+        // Queue frames until MSE is ready
+        earlyFrames.push(frame);
+        return;
+      }
       
-      const reader = response.body.getReader();
-      let chunkCount = 0;
+      feedFrame(frame);
+    },
+    // onAudioFrame
+    (frame) => {
+      if (!hasAudio) return; // Utiliser la valeur capturée, pas réactive
       
-      while (true) {
+      // FLAC (wFormatTag=61868=0xF1AC) - Décoder avec Web Audio API
+      if (frame.format?.wFormatTag === 61868) {
+        decodeAndPlayFlac(frame.frameData, frame.format.nSamplesPerSec);
+        return;
+      }
+      
+      // Pour les autres formats (AAC, μ-law), utiliser JMuxer
+      if (!mseReady) {
+        // Queue audio frames until MSE is ready
+        audioFramesQueued.push(frame);
+        return;
+      }
+      
+      // Feed l'audio à JMuxer (il gère AAC automatiquement)
+      if (jmuxer) {
+        jmuxer.feed({
+          audio: frame.frameData
+        });
+      }
+    },
+    // onStreamInfo
+    (bitmapHeader, audioHeader) => {
+      const audioFormat = audioHeader ? (
+        audioHeader.wFormatTag === 61868 ? 'FLAC' :
+        audioHeader.wFormatTag === 7 ? 'μ-law' :
+        audioHeader.wFormatTag === 255 ? 'AAC' : `format ${audioHeader.wFormatTag}`
+      ) : 'none';
+      console.log('📊 Stream info:', {
+        video: bitmapHeader ? `${bitmapHeader.biWidth}x${bitmapHeader.biHeight} ${bitmapHeader.biCompression}` : 'none',
+        audio: audioHeader ? `${audioFormat} ${audioHeader.nSamplesPerSec}Hz ${audioHeader.nChannels}ch` : 'none'
+      });
+    },
+    // onStatusBlock
+    (status) => {
+      // Status updates (recording, motion, etc.)
+      if (status.bMotion) {
+        console.log('🚨 Motion detected');
+      }
+    }
+  );
+  
+  // Fonction pour feed les frames comme UI3 (buffer + duration)
+  const feedFrame = (frame) => {
+    if (lastFrame) {
+      // Calculer la durée entre frames
+      lastFrameDuration = frame.time - lastFrame.time;
+      
+      // Feed la FRAME PRÉCÉDENTE avec la durée calculée
+      jmuxer.feed({
+        video: lastFrame.frameData,
+        duration: lastFrameDuration,
+        isLastVideoFrameComplete: true
+      });
+    }
+    
+    // Stocker la frame courante pour le prochain cycle
+    lastFrame = frame;
+  };
+  
+  // Créer nouveaux controllers
+  abortController = new AbortController();
+  
+  // Fetch et parse le stream
+  let chunkCount = 0;
+  
+  try {
+    const response = await fetch(streamURL, { signal: abortController.signal });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    
+    const reader = response.body.getReader();
+    
+    const read = async () => {
+      try {
         const { done, value } = await reader.read();
         
         if (done) {
-          console.log('✅ Stream ended');
-          break;
+          console.log('✅ Stream ended gracefully');
+          return;
         }
         
-        chunkCount++;
-        
-        // Envoyer les chunks MPEG bruts à jmuxer
-        if (jmuxer.value && value && value.byteLength > 0) {
-          jmuxer.value.feed({
-            video: value  // value est déjà un Uint8Array
-          });
+        if (value) {
+          chunkCount++;
+          if (chunkCount % 100 === 1) {
+            console.log(`📦 Chunk #${chunkCount}: ${value.length} bytes`);
+          }
           
-          // Cacher le loading après le premier chunk valide
-          if (chunkCount === 1) {
-            console.log(`✅ First chunk received: ${value.byteLength} bytes`);
-            loading.value = false;
+          // Feed les données au parser
+          parser.write(value);
+          
+          try {
+            const result = parser.parse();
+            if (result && result.ended) {
+              console.log('🏁 Stream ended by server');
+              return;
+            }
+          } catch (err) {
+            console.error('❌ Parse error:', err);
+            streamLoading.value = false;
+            return;
           }
         }
+        
+        read();
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          console.error('❌ Read error:', err);
+          streamLoading.value = false;
+        }
       }
-    } catch (err) {
-      if (err.name !== 'AbortError') {
-        console.error('❌ Stream error:', err);
-      }
+    };
+    
+    read();
+  } catch (err) {
+    if (err.name !== 'AbortError') {
+      console.error('❌ Fetch error:', err);
+      streamLoading.value = false;
+      streamError.value = `Erreur de streaming: ${err.message}`;
     }
-  })(); // Exécuter la fonction async immédiatement
+  }
+};
+
+// Watcher pour changement de caméra
+watch(selectedCamera, () => {
+  console.log('🔄 Camera changed');
+  startStream();
+});
+
+// Watcher pour toggle audio (comme UI3's AudioToggleNotify)
+watch(audioEnabled, (newValue, oldValue) => {
+  console.log('🔊 Audio toggle:', { from: oldValue, to: newValue });
+  
+  // Si un stream est actif, le rouvrir avec le nouveau paramètre audio (comme UI3)
+  if (isStreamActive && currentCamera) {
+    console.log('🔄 Reopening stream with audio:', newValue);
+    startStream();
+  }
+});
+
+// Watcher pour le player (initial mount)
+watch(videoPlayer, (player) => {
+  if (player && selectedCamera.value) {
+    console.log('🎬 Player ready');
+    startStream();
+  }
 });
 
 onMounted(async () => {
@@ -301,12 +650,23 @@ onMounted(async () => {
   statusInterval.value = setInterval(updateServerStatus, 2000);
 });
 
+
 onUnmounted(() => {
+  console.log('🧹 LiveView unmounting, cleaning up...');
   camerasStore.stopAutoUpdate();
   
-  if (jmuxer.value) {
-    jmuxer.value.destroy();
-    jmuxer.value = null;
+  // Abort streams
+  if (abortController) {
+    abortController.abort();
+    abortController = null;
+  }
+  
+  // Close AudioContext
+  if (audioContext) {
+    console.log('🔇 Closing AudioContext');
+    audioContext.close();
+    audioContext = null;
+    gainNode = null;
   }
   
   if (statusInterval.value) {
@@ -324,34 +684,40 @@ onUnmounted(() => {
 }
 
 .header {
-  padding: var(--spacing-md);
+  padding: var(--spacing-xs) var(--spacing-md);
   background: var(--color-surface);
   border-bottom: 1px solid var(--color-border);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-lg);
 }
 
 .header h1 {
-  font-size: 20px;
-  margin-bottom: var(--spacing-sm);
+  font-size: 18px;
+  margin: 0;
 }
 
 .server-info {
   display: flex;
   gap: var(--spacing-md);
-  font-size: 12px;
+  font-size: 11px;
+  opacity: 0.8;
 }
 
 .info-item {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  gap: 4px;
 }
 
 .info-item .label {
   color: var(--color-text-secondary);
+  font-size: 10px;
 }
 
 .info-item .value {
   font-weight: 600;
+  font-size: 11px;
 }
 
 .info-item .value.good { color: var(--color-success); }
@@ -462,6 +828,140 @@ onUnmounted(() => {
   height: 100%;
   background: #000;
   object-fit: contain;
+}
+
+.video-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.stream-loading {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacing-md);
+  z-index: 5;
+  color: white;
+  background: rgba(0, 0, 0, 0.7);
+  padding: var(--spacing-lg);
+  border-radius: var(--radius-lg);
+}
+
+.stream-loading p {
+  font-size: 14px;
+  margin: 0;
+}
+
+.video-controls {
+  position: absolute;
+  bottom: var(--spacing-lg);
+  left: var(--spacing-lg);
+  display: flex;
+  gap: var(--spacing-sm);
+  z-index: 10;
+}
+
+.btn-audio {
+  width: 48px;
+  height: 48px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  color: white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: var(--transition);
+}
+
+.btn-audio:hover {
+  background: rgba(0, 0, 0, 0.8);
+}
+
+.btn-audio.active {
+  background: var(--color-accent);
+}
+
+.btn-audio svg {
+  width: 24px;
+  height: 24px;
+}
+
+.volume-control {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: 0 var(--spacing-md);
+  background: rgba(0, 0, 0, 0.6);
+  border-radius: 24px;
+  height: 48px;
+  backdrop-filter: blur(10px);
+  animation: slideIn 0.2s ease-out;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.volume-slider {
+  width: 100px;
+  height: 4px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+
+.volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  background: white;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.volume-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+}
+
+.volume-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  background: white;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.volume-slider::-moz-range-thumb:hover {
+  transform: scale(1.2);
+}
+
+.volume-label {
+  color: white;
+  font-size: 12px;
+  font-weight: 500;
+  min-width: 35px;
+  text-align: center;
 }
 
 .camera-info {

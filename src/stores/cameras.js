@@ -120,12 +120,12 @@ export const useCamerasStore = defineStore('cameras', {
       return await authStore.apiClient.triggerCamera(cameraId);
     },
 
-    getStreamURL(cameraId, quality = 'high') {
+    getStreamURL(cameraId, quality = 'high', enableAudio = false) {
       const authStore = useAuthStore();
       
       if (!authStore.apiClient) return '';
       
-      return authStore.apiClient.getStreamURL(cameraId, quality);
+      return authStore.apiClient.getStreamURL(cameraId, quality, enableAudio);
     },
 
     getSnapshotURL(cameraId, width = 640, height = 480) {
