@@ -44,6 +44,7 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 3000,
       host: true,
+      allowedHosts: ['bi.mxmk.cc', 'localhost'],
       proxy: {
         '/api': {
           target: blueIrisServer,
