@@ -54,8 +54,14 @@ class BlueIrisParser {
         const buf = this.read(6);
         if (!buf) return;
 
+        // Debug: log ce qui est reçu
+        const text = new TextDecoder('utf-8', { fatal: false }).decode(buf);
+        console.log('🔍 Parser state 0: received 6 bytes:', text, 'hex:', Array.from(buf).map(b => b.toString(16).padStart(2, '0')).join(' '));
+        console.log('🔍 Buffer length before read:', this.buffer.length + 6, 'bytes');
+
         // Vérifie "blue"
         if (buf[0] !== 98 || buf[1] !== 108 || buf[2] !== 117 || buf[3] !== 101) {
+          console.error('❌ Expected "blue" (62 6c 75 65) but got:', Array.from(buf).map(b => b.toString(16).padStart(2, '0')).join(' '));
           throw new Error('Stream did not start with "blue"');
         }
 
@@ -65,6 +71,7 @@ class BlueIrisParser {
         }
 
         this.streamHeaderSize = buf[5];
+        console.log('✅ Found "blue" header, streams:', this.availableStreams, 'headerSize:', this.streamHeaderSize);
         this.state = 1;
       } 
       else if (this.state === 1) {

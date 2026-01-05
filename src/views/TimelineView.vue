@@ -1,14 +1,14 @@
 <template>
   <div class="timeline-view">
     <!-- Header compact -->
-    <div class="header">
+    <div class="header" v-if="!fullscreenCamera">
       <h1>{{ t('timeline.title') }}</h1>
       
       <!-- Navigation de date -->
       <div class="date-picker">
         <button @click="previousDay" class="btn-icon">
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path>
           </svg>
         </button>
         
@@ -16,11 +16,11 @@
           v-model="selectedDate"
           type="date"
           class="input date-input"
-        />
+        >
         
         <button @click="nextDay" class="btn-icon">
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
           </svg>
         </button>
       </div>
@@ -43,7 +43,7 @@
     </div>
 
     <!-- Grille de caméras -->
-    <div class="cameras-grid">
+    <div class="cameras-grid" v-if="!fullscreenCamera">
       <div
         v-for="camera in filteredCameras"
         :key="camera.optionValue"
@@ -54,9 +54,24 @@
         <canvas
           :ref="el => cameraCanvases[camera.optionValue] = el"
           class="camera-canvas"
-          width="320"
-          height="180"
-        ></canvas>
+          @click="openFullscreenCamera(camera.optionValue)"
+          style="cursor: pointer;"
+        />
+      </div>
+    </div>
+
+    <!-- Vue plein écran pour une caméra -->
+    <div class="fullscreen-camera" v-if="fullscreenCamera">
+      <div class="fullscreen-header">
+        <h2>{{ availableCameras.find(c => c.optionValue === fullscreenCamera)?.optionDisplay }}</h2>
+        <button @click="closeFullscreenCamera" class="btn-close">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+          </svg>
+        </button>
+      </div>
+      <div class="fullscreen-video-container">
+        <video id="fullscreen-video" autoplay muted playsinline></video>
       </div>
     </div>
 
@@ -64,12 +79,19 @@
     <div class="timeline-bar">
       <!-- Contrôles de lecture -->
       <div class="playback-controls">
+        <button @click="goLive" class="btn-live" :class="{ active: isLive }" title="Passer en direct">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="currentColor" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="8"></circle>
+          </svg>
+          LIVE
+        </button>
+        
         <button @click="togglePlayPause" class="btn-play" :title="isPlaying ? 'Pause' : 'Lecture'">
           <svg v-if="!isPlaying" xmlns="http://www.w3.org/2000/svg" fill="currentColor" viewBox="0 0 24 24">
-            <path d="M8 5v14l11-7z"/>
+            <path d="M8 5v14l11-7z"></path>
           </svg>
           <svg v-else xmlns="http://www.w3.org/2000/svg" fill="currentColor" viewBox="0 0 24 24">
-            <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z"/>
+            <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z"></path>
           </svg>
         </button>
         
@@ -88,13 +110,13 @@
         <div class="zoom-controls">
           <button @click="zoomOut" class="btn-zoom" title="Dézoomer">
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM13 10H7" />
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM13 10H7"></path>
             </svg>
           </button>
           <span class="zoom-label">{{ zoomLevels[zoomLevel].label }}</span>
           <button @click="zoomIn" class="btn-zoom" title="Zoomer">
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v6m3-3H7" />
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v6m3-3H7"></path>
             </svg>
           </button>
         </div>
@@ -137,31 +159,74 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useAuthStore } from '../stores/auth';
 import { useCamerasStore } from '../stores/cameras';
+import JMuxer from '../utils/jmuxer-wrapper.js';
+import BlueIrisParser from '../utils/blueIrisParser';
 
 const { t } = useI18n();
 const authStore = useAuthStore();
 const camerasStore = useCamerasStore();
 
+// Fonction helper pour obtenir la date locale au format YYYY-MM-DD
+const getLocalDateString = () => {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+};
+
 // État
-const selectedDate = ref(new Date().toISOString().split('T')[0]);
+const selectedDate = ref(getLocalDateString());
 const dayEvents = ref([]);
 const loading = ref(false);
 const visibleCameras = ref(new Set());
 const cameraCanvases = ref({});
 const timelineTrack = ref(null);
 
-// Initialiser le curseur à l'heure actuelle
-const now = new Date();
-const msFromMidnight = now.getHours() * 60 * 60 * 1000 + now.getMinutes() * 60 * 1000 + now.getSeconds() * 1000;
-const initialPosition = (msFromMidnight / (24 * 60 * 60 * 1000)) * 100;
-const cursorPosition = ref(initialPosition);
+// Initialiser le curseur à l'heure actuelle en mode LIVE
+const getCurrentTimePercent = () => {
+  const now = new Date();
+  const msIntoDay = now.getHours() * 60 * 60 * 1000 + 
+                    now.getMinutes() * 60 * 1000 + 
+                    now.getSeconds() * 1000 +
+                    now.getMilliseconds();
+  const totalMsInDay = 24 * 60 * 60 * 1000;
+  return (msIntoDay / totalMsInDay) * 100;
+};
+
+const cursorPosition = ref(getCurrentTimePercent());
 
 const isDragging = ref(false);
 
+// Mode plein écran pour une caméra
+const fullscreenCamera = ref(null); // ID de la caméra en plein écran
+let fullscreenVideo = null;
+let fullscreenJmuxer = null;
+let fullscreenParser = null;
+let fullscreenAbortController = null;
+
+// Mode live
+const isLive = ref(true);
+let liveUpdateInterval = null;
+const mosaicImg = ref(null); // Image source unique pour toutes les caméras
+const cameraRects = ref({}); // Coordonnées de chaque caméra dans la mosaïque
+let jmuxer = null;
+let parser = null;
+let abortController = null;
+let mosaicVideo = null; // Hidden video element for frame capture
+let captureInterval = null;
+let isMosaicStreamActive = false; // Guard pour éviter les redémarrages multiples
+let retryTimeout = null; // Timeout pour les retry
+let lastHistoricalPosition = null; // Dernière position du stream historique
+let seekDebounceTimeout = null; // Debounce pour le seek manuel
+let fullscreenSeekDebounceTimeout = null; // Debounce pour le seek en fullscreen
+
 // Contrôles de lecture
-const isPlaying = ref(false);
+const isPlaying = ref(true);
 const playbackSpeed = ref(1);
 const playbackSpeeds = [1, 2, 5, 10, 20, 50];
+
+// Calculer le speed pour les streams (0 = pause, 100 = 1x, 200 = 2x, etc.)
+const streamSpeed = computed(() => {
+  return isPlaying.value ? (100 * playbackSpeed.value) : 0;
+});
 let playbackAnimationFrame = null;
 let lastPlaybackTime = null;
 
@@ -184,8 +249,11 @@ const visibleRange = computed(() => {
   const currentZoom = zoomLevels[zoomLevel.value];
   const visibleMs = dayMs / currentZoom.scale;
   
+  // Toujours utiliser 24h complètes pour l'affichage
+  const maxDayMs = dayMs;
+  
   // Centrer sur la position du curseur
-  const cursorMs = (cursorPosition.value / 100) * dayMs;
+  const cursorMs = (cursorPosition.value / 100) * maxDayMs;
   let startMs = cursorMs - visibleMs / 2;
   let endMs = cursorMs + visibleMs / 2;
   
@@ -194,12 +262,12 @@ const visibleRange = computed(() => {
     endMs -= startMs;
     startMs = 0;
   }
-  if (endMs > dayMs) {
-    startMs -= (endMs - dayMs);
-    endMs = dayMs;
+  if (endMs > maxDayMs) {
+    startMs -= (endMs - maxDayMs);
+    endMs = maxDayMs;
   }
   startMs = Math.max(0, startMs);
-  endMs = Math.min(dayMs, endMs);
+  endMs = Math.min(maxDayMs, endMs);
   
   return { startMs, endMs, durationMs: endMs - startMs };
 });
@@ -255,6 +323,11 @@ const filteredCameras = computed(() => {
 // Événements visibles dans la plage de zoom actuelle
 const visibleEvents = computed(() => {
   return dayEvents.value.filter(event => {
+    // Si une caméra est en plein écran, afficher seulement ses événements
+    if (fullscreenCamera.value && event.camera !== fullscreenCamera.value) {
+      return false;
+    }
+    
     const pos = getEventPosition(event);
     return pos >= 0 && pos <= 100; // Exclure les événements hors de la vue
   });
@@ -262,7 +335,9 @@ const visibleEvents = computed(() => {
 
 // Temps actuel basé sur le curseur (en ms depuis minuit)
 const currentTimeMs = computed(() => {
-  return (cursorPosition.value / 100) * 24 * 60 * 60 * 1000;
+  // Toujours utiliser 24h complètes pour le calcul
+  const dayMs = 24 * 60 * 60 * 1000;
+  return (cursorPosition.value / 100) * dayMs;
 });
 
 // Formattage du temps du curseur
@@ -276,15 +351,17 @@ const formatCursorTime = computed(() => {
 
 // Navigation de date
 const previousDay = () => {
-  const date = new Date(selectedDate.value);
+  const [year, month, day] = selectedDate.value.split('-').map(Number);
+  const date = new Date(year, month - 1, day);
   date.setDate(date.getDate() - 1);
-  selectedDate.value = date.toISOString().split('T')[0];
+  selectedDate.value = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 };
 
 const nextDay = () => {
-  const date = new Date(selectedDate.value);
+  const [year, month, day] = selectedDate.value.split('-').map(Number);
+  const date = new Date(year, month - 1, day);
   date.setDate(date.getDate() + 1);
-  selectedDate.value = date.toISOString().split('T')[0];
+  selectedDate.value = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 };
 
 // Filtres de caméras
@@ -306,8 +383,9 @@ const loadDayEvents = async () => {
   
   try {
     // Utiliser le début de la journée en heure locale
-    const dayStart = new Date(selectedDate.value);
-    dayStart.setHours(0, 0, 0, 0);
+    // IMPORTANT: Parser manuellement pour éviter les problèmes de fuseau horaire
+    const [year, month, day] = selectedDate.value.split('-').map(Number);
+    const dayStart = new Date(year, month - 1, day, 0, 0, 0, 0);
     const startTimestamp = Math.floor(dayStart.getTime() / 1000);
     const endTimestamp = startTimestamp + (24 * 60 * 60);
     
@@ -375,8 +453,8 @@ const getEventPosition = (event) => {
   const eventTime = new Date(event.date * 1000);
   
   // Début de la journée sélectionnée en heure locale
-  const dayStart = new Date(selectedDate.value);
-  dayStart.setHours(0, 0, 0, 0);
+  const [year, month, day] = selectedDate.value.split('-').map(Number);
+  const dayStart = new Date(year, month - 1, day, 0, 0, 0, 0);
   
   const msFromMidnight = eventTime.getTime() - dayStart.getTime();
   const range = visibleRange.value;
@@ -409,9 +487,14 @@ const getEventClass = (event) => {
 
 // Vérifier si une caméra a de la vidéo au temps actuel
 const isCameraActiveAtTime = (cameraId) => {
+  // En mode LIVE, toutes les caméras streamées sont actives
+  if (isLive.value) {
+    return true;
+  }
+  
   // Début de la journée en heure locale
-  const dayStart = new Date(selectedDate.value);
-  dayStart.setHours(0, 0, 0, 0);
+  const [year, month, day] = selectedDate.value.split('-').map(Number);
+  const dayStart = new Date(year, month - 1, day, 0, 0, 0, 0);
   
   const targetTime = dayStart.getTime() + currentTimeMs.value;
   const targetTimestamp = targetTime / 1000;
@@ -439,7 +522,48 @@ const zoomOut = () => {
 };
 
 // Contrôles de lecture
+const goLive = () => {
+  // Vérifier que c'est aujourd'hui (en heure locale)
+  const today = getLocalDateString();
+  
+  if (selectedDate.value !== today) {
+    // Aller à aujourd'hui
+    selectedDate.value = today;
+  }
+  
+  // Mettre le curseur à l'heure actuelle
+  cursorPosition.value = getCurrentTimePercent();
+  
+  // Activer le mode live
+  isLive.value = true;
+  
+  // Arrêter la lecture normale
+  if (isPlaying.value) {
+    stopPlayback();
+  }
+  
+  // Pas besoin d'interval en mode live - on utilise MJPEG
+  if (liveUpdateInterval) {
+    clearInterval(liveUpdateInterval);
+    liveUpdateInterval = null;
+  }
+  
+  // Mise à jour immédiate pour passer en MJPEG
+  updateAllStreams();
+};
+
 const togglePlayPause = () => {
+  // Désactiver le mode live si on lance la lecture
+  if (isLive.value) {
+    isLive.value = false;
+    if (liveUpdateInterval) {
+      clearInterval(liveUpdateInterval);
+      liveUpdateInterval = null;
+    }
+    // Arrêter le stream mosaïque
+    stopMosaicStream();
+  }
+  
   isPlaying.value = !isPlaying.value;
   
   if (isPlaying.value) {
@@ -447,10 +571,26 @@ const togglePlayPause = () => {
   } else {
     stopPlayback();
   }
+  
+  // Redémarrer les streams immédiatement avec le nouveau speed (pause ou lecture)
+  if (!isLive.value) {
+    updateAllStreams(false, true); // immediate = true pour redémarrage instantané
+    if (fullscreenCamera.value) {
+      startFullscreenStream();
+    }
+  }
 };
 
 const setPlaybackSpeed = (speed) => {
   playbackSpeed.value = speed;
+  
+  // Redémarrer les streams immédiatement avec la nouvelle vitesse
+  if (!isLive.value && isPlaying.value) {
+    updateAllStreams(false, true); // immediate = true pour redémarrage instantané
+    if (fullscreenCamera.value) {
+      startFullscreenStream();
+    }
+  }
 };
 
 const startPlayback = () => {
@@ -473,15 +613,34 @@ const updatePlayback = (currentTime) => {
     const deltaMs = currentTime - lastPlaybackTime;
     const progressMs = deltaMs * playbackSpeed.value;
     
-    // Convertir en pourcentage de la journée
-    const dayMs = 24 * 60 * 60 * 1000;
-    const deltaPercent = (progressMs / dayMs) * 100;
+    // Convertir en pourcentage de la journée (toujours 24h)
+    const today = getLocalDateString();
+    const isToday = selectedDate.value === today;
+    
+    const maxDayMs = 24 * 60 * 60 * 1000;
+    const deltaPercent = (progressMs / maxDayMs) * 100;
     
     cursorPosition.value += deltaPercent;
     
-    // Boucler à la fin de la journée
-    if (cursorPosition.value >= 100) {
+    // Si aujourd'hui, limiter à l'heure actuelle
+    if (isToday) {
+      const now = new Date();
+      const currentTimeMs = now.getHours() * 60 * 60 * 1000 + 
+                           now.getMinutes() * 60 * 1000 + 
+                           now.getSeconds() * 1000;
+      const currentPercent = (currentTimeMs / maxDayMs) * 100;
+      
+      if (cursorPosition.value >= currentPercent) {
+        cursorPosition.value = currentPercent;
+        stopPlayback();
+      }
+    } else if (cursorPosition.value >= 100) {
+      // Boucler pour les jours passés
       cursorPosition.value = 0;
+      // Repositionner le stream au début
+      if (!isLive.value) {
+        updateAllStreams(true);
+      }
     }
   }
   
@@ -492,11 +651,47 @@ const updatePlayback = (currentTime) => {
 // Interaction avec la timeline
 const seekToTime = (e) => {
   if (!timelineTrack.value) return;
+  
+  // Désactiver le mode live si on déplace le curseur
+  if (isLive.value) {
+    isLive.value = false;
+    if (liveUpdateInterval) {
+      clearInterval(liveUpdateInterval);
+      liveUpdateInterval = null;
+    }
+  }
+  
   const rect = timelineTrack.value.getBoundingClientRect();
   const x = e.clientX - rect.left;
-  const percentage = (x / rect.width) * 100;
-  cursorPosition.value = Math.max(0, Math.min(100, percentage));
-  updateAllStreams();
+  const clickPercent = (x / rect.width) * 100; // Pourcentage dans la zone visible
+  
+  // Convertir en position absolue dans la journée en tenant compte du zoom
+  const dayMs = 24 * 60 * 60 * 1000;
+  const range = visibleRange.value;
+  
+  // Position en ms dans la plage visible
+  const msInVisibleRange = (clickPercent / 100) * range.durationMs;
+  const absoluteMs = range.startMs + msInVisibleRange;
+  
+  // Convertir en pourcentage de la journée complète
+  let percentage = (absoluteMs / dayMs) * 100;
+  
+  // Si aujourd'hui, limiter à l'heure actuelle
+  const today = getLocalDateString();
+  const isToday = selectedDate.value === today;
+  if (isToday) {
+    const now = new Date();
+    const currentTimeMs = now.getHours() * 60 * 60 * 1000 + 
+                         now.getMinutes() * 60 * 1000 + 
+                         now.getSeconds() * 1000;
+    const currentPercent = (currentTimeMs / dayMs) * 100;
+    percentage = Math.max(0, Math.min(currentPercent, percentage));
+  } else {
+    percentage = Math.max(0, Math.min(100, percentage));
+  }
+  
+  cursorPosition.value = percentage;
+  updateAllStreams(true); // Force restart pour seek manuel
 };
 
 const startDrag = (e) => {
@@ -519,47 +714,431 @@ const startDrag = (e) => {
   document.addEventListener('mouseup', onMouseUp);
 };
 
-// Mise à jour de tous les streams à la position du curseur
-const updateAllStreams = () => {
-  for (const camera of filteredCameras.value) {
-    updateCameraStream(camera.optionValue);
+// Mettre à jour tous les streams à la position du curseur
+const updateAllStreams = (forceRestart = false, immediate = false) => {
+  if (isLive.value) {
+    // En mode live, démarrer le stream mosaïque une seule fois
+    if (!isMosaicStreamActive) {
+      startMosaicStream();
+    }
+  } else {
+    // En mode historique avec stream mosaïque
+    const currentPos = currentTimeMs.value;
+    
+    // Redémarrer seulement si:
+    // 1. Force restart (seek manuel avec debounce)
+    // 2. Pas de stream actif
+    // 3. Position a beaucoup changé (>5 secondes de différence)
+    const shouldRestart = !forceRestart && (
+                         !isMosaicStreamActive || 
+                         !lastHistoricalPosition ||
+                         Math.abs(currentPos - lastHistoricalPosition) > 5000);
+    
+    if (shouldRestart || immediate) {
+      lastHistoricalPosition = currentPos;
+      stopMosaicStream();
+      startMosaicStream();
+    } else if (forceRestart) {
+      // Pour le seek manuel, debounce pour éviter trop de requêtes
+      if (seekDebounceTimeout) {
+        clearTimeout(seekDebounceTimeout);
+      }
+      seekDebounceTimeout = setTimeout(() => {
+        lastHistoricalPosition = currentPos;
+        stopMosaicStream();
+        startMosaicStream();
+      }, 300); // Attendre 300ms après le dernier mouvement
+    }
   }
 };
 
-// Mettre à jour le stream d'une caméra avec approche simplifiée
+// Démarrer le stream mosaïque avec JMuxer (approche UI3 avec H.264/H.265)
+const startMosaicStream = async () => {
+  // Éviter les appels multiples pendant qu'un stream est actif
+  if (isMosaicStreamActive) {
+    console.log('⏭️ Stream mosaïque déjà actif, skip');
+    return;
+  }
+  
+  stopMosaicStream();
+  isMosaicStreamActive = true;
+  
+  let mosaicUrl;
+  
+  if (isLive.value) {
+    // Mode LIVE: stream en temps réel
+    mosaicUrl = `/video/index/2.0?session=${authStore.apiClient.session}&audio=0&stream=0&w=1648&h=1080&q=23&kbps=1000&gop=1000&zfl=1&preset=1&vcs=3&rc=0&extend=2`;
+  } else {
+    // Mode historique: lecture à partir d'un timestamp
+    const [year, month, day] = selectedDate.value.split('-').map(Number);
+    const dayStart = new Date(year, month - 1, day, 0, 0, 0, 0);
+    const posMs = dayStart.getTime() + currentTimeMs.value;
+    
+    mosaicUrl = `/time/index?session=${authStore.apiClient.session}&pos=${posMs}&audio=0&stream=0&w=1648&h=1080&q=23&kbps=1000&gop=1000&zfl=1&preset=1&vcs=3&rc=0&speed=${streamSpeed.value}&extend=2`;
+  }
+  
+  console.log('🎬 Starting mosaic H.264/H.265 stream:', mosaicUrl);
+  
+  // Utiliser le mapping statique des caméras
+  useStaticMapping();
+  
+  // Créer un élément vidéo caché pour récupérer les frames
+  mosaicVideo = document.createElement('video');
+  mosaicVideo.muted = true;
+  mosaicVideo.playsInline = true;
+  mosaicVideo.style.position = 'absolute';
+  mosaicVideo.style.top = '-9999px';
+  mosaicVideo.style.width = '1648px';
+  mosaicVideo.style.height = '1080px';
+  document.body.appendChild(mosaicVideo);
+  
+  // Variables pour le buffering
+  let mseReady = false;
+  let earlyFrames = [];
+  
+  // Créer le parser Blue Iris
+  parser = new BlueIrisParser(
+    // onVideoFrame
+    (frame) => {
+      if (!jmuxer) {
+        console.log(`🎬 Initializing JMuxer with codec: ${frame.codec}`);
+        
+        jmuxer = new JMuxer({
+          node: mosaicVideo,
+          mode: 'video',
+          videoCodec: frame.codec,
+          maxDelay: 1000,
+          flushingTime: 0,
+          clearBuffer: true,
+          debug: false,
+          onReady: () => {
+            console.log('✅ MSE Ready for mosaic');
+            mseReady = true;
+            
+            // Feed frames en attente
+            while (earlyFrames.length > 0) {
+              const earlyFrame = earlyFrames.shift();
+              jmuxer.feed({ video: earlyFrame.frameData });
+            }
+            
+            // Démarrer la lecture vidéo
+            mosaicVideo.play().then(() => {
+              console.log('▶️ Mosaic video playing');
+              // Démarrer la capture de frames
+              startFrameCapture();
+            }).catch(err => {
+              console.error('❌ Failed to play mosaic video:', err);
+            });
+          },
+          onError: (err) => {
+            console.error('❌ JMuxer error:', err);
+          }
+        });
+      }
+      
+      if (!mseReady) {
+        earlyFrames.push(frame);
+        return;
+      }
+      
+      jmuxer.feed({ video: frame.frameData });
+    },
+    // onAudioFrame - ignoré
+    () => {},
+    // onStreamInfo
+    (bitmapHeader, audioHeader) => {
+      console.log('📊 Mosaic stream info:', {
+        video: bitmapHeader ? `${bitmapHeader.biWidth}x${bitmapHeader.biHeight} ${bitmapHeader.biCompression}` : 'none',
+        audio: audioHeader ? `format ${audioHeader.wFormatTag}` : 'none'
+      });
+    },
+    // onStatusBlock
+    (status) => {
+      // Status updates du stream mosaïque (optionnel)
+    }
+  );
+  
+  // Démarrer le fetch du stream
+  abortController = new AbortController();
+  
+  try {
+    const response = await fetch(mosaicUrl, {
+      signal: abortController.signal,
+      headers: {
+        'Accept': 'video/mpeg, video/*, */*'
+      }
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    
+    const reader = response.body.getReader();
+    
+    let chunkCount = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      
+      if (done) {
+        console.log('📡 Stream ended');
+        break;
+      }
+      
+      chunkCount++;
+      if (chunkCount <= 3) {
+        // Logger les premiers chunks pour debug
+        const preview = value.slice(0, 20);
+        const textPreview = new TextDecoder('utf-8', { fatal: false }).decode(preview);
+        console.log(`📦 Chunk #${chunkCount}: ${value.length} bytes, starts with: "${textPreview}" (hex: ${Array.from(preview).map(b => b.toString(16).padStart(2, '0')).join(' ')})`);
+      }
+      
+      // Feed les chunks au parser qui va extraire les frames vidéo
+      parser.write(value);
+      parser.parse(); // Important: déclenche le parsing après write
+    }
+  } catch (error) {
+    if (error.name !== 'AbortError') {
+      console.error('❌ Stream error:', error);
+      
+      // Si erreur 503 (Service Unavailable), retry après un délai
+      if (error.message && error.message.includes('503')) {
+        console.log('⏳ Erreur 503, retry dans 5 secondes...');
+        if (retryTimeout) clearTimeout(retryTimeout);
+        retryTimeout = setTimeout(() => {
+          isMosaicStreamActive = false;
+          if (isLive.value) {
+            startMosaicStream();
+          }
+        }, 5000);
+      }
+    }
+  } finally {
+    // Réinitialiser le flag après la fin du stream
+    isMosaicStreamActive = false;
+  }
+};
+
+// Capturer les frames depuis la vidéo et les découper
+const startFrameCapture = () => {
+  if (captureInterval) clearInterval(captureInterval);
+  
+  const tempCanvas = document.createElement('canvas');
+  tempCanvas.width = 1648;
+  tempCanvas.height = 1080;
+  const tempCtx = tempCanvas.getContext('2d');
+  
+  let frameCount = 0;
+  
+  captureInterval = setInterval(() => {
+    if (!mosaicVideo || mosaicVideo.paused || mosaicVideo.ended) {
+      return;
+    }
+    
+    // Dessiner la vidéo sur le canvas temporaire
+    tempCtx.drawImage(mosaicVideo, 0, 0, 1648, 1080);
+    
+    // Créer une image depuis le canvas
+    const img = new Image();
+    img.onload = () => {
+      mosaicImg.value = img;
+      drawMosaicToCanvases();
+      frameCount++;
+      if (frameCount <= 5 || frameCount % 60 === 0) {
+        console.log('✅ Frame captured:', frameCount);
+      }
+    };
+    img.src = tempCanvas.toDataURL('image/jpeg', 0.92);
+  }, 66); // ~15 fps
+};
+
+// Arrêter le stream mosaïque
+const stopMosaicStream = () => {
+  isMosaicStreamActive = false;
+  
+  if (retryTimeout) {
+    clearTimeout(retryTimeout);
+    retryTimeout = null;
+  }
+  
+  if (captureInterval) {
+    clearInterval(captureInterval);
+    captureInterval = null;
+  }
+  
+  if (abortController) {
+    abortController.abort();
+    abortController = null;
+  }
+  
+  if (jmuxer) {
+    jmuxer.destroy();
+    jmuxer = null;
+  }
+  
+  if (parser) {
+    parser.reset();
+    parser = null;
+  }
+  
+  if (mosaicVideo) {
+    mosaicVideo.pause();
+    mosaicVideo.src = '';
+    if (mosaicVideo.parentNode) {
+      mosaicVideo.parentNode.removeChild(mosaicVideo);
+    }
+    mosaicVideo = null;
+  }
+  
+  if (mosaicImg.value) {
+    mosaicImg.value = null;
+  }
+  
+  cameraRects.value = {};
+};
+
+// Utiliser un mapping statique si les headers ne sont pas disponibles
+const useStaticMapping = () => {
+  const staticCamList = ["voliere","NC","milan","poulailler","courscote","garagedetache","livia","soussol5056","cam3141","porteav","cours5056","chemin","julia"];
+  const staticRecList = [[2,62,246,495],[250,21,524,228],[528,23,890,225],[894,21,1258,228],[1262,62,1646,494],[250,251,752,536],[756,251,1258,536],[5,559,425,795],[432,566,880,1070],[894,559,1208,795],[1222,559,1646,795],[2,828,428,1067],[1034,818,1496,1078]];
+  
+  cameraRects.value = {};
+  staticCamList.forEach((cameraName, index) => {
+    if (staticRecList[index]) {
+      const [x1, y1, x2, y2] = staticRecList[index];
+      cameraRects.value[cameraName] = {
+        x: x1,
+        y: y1,
+        width: x2 - x1,
+        height: y2 - y1
+      };
+    }
+  });
+  
+  console.log('Using static camera mapping:', cameraRects.value);
+};
+
+// Parser le mapping caméra -> coordonnées depuis x-camlist et x-reclist
+const parseCameraMapping = (camlist, reclist) => {
+  try {
+    // Parser x-camlist: "cam1","cam2","cam3",...
+    const cameras = camlist.match(/"([^"]+)"/g).map(s => s.replace(/"/g, ''));
+    
+    // Parser x-reclist: [x1,y1,x2,y2],[x1,y1,x2,y2],...
+    const rects = JSON.parse(`[${reclist}]`);
+    
+    console.log('Parsed cameras:', cameras);
+    console.log('Parsed rects:', rects);
+    
+    // Créer le mapping caméra -> rectangle
+    cameraRects.value = {};
+    cameras.forEach((cameraName, index) => {
+      if (rects[index]) {
+        const [x1, y1, x2, y2] = rects[index];
+        cameraRects.value[cameraName] = {
+          x: x1,
+          y: y1,
+          width: x2 - x1,
+          height: y2 - y1
+        };
+      }
+    });
+    
+    console.log('Camera rects mapping:', cameraRects.value);
+  } catch (err) {
+    console.error('Failed to parse camera mapping:', err);
+  }
+};
+// Dessiner les portions de la mosaïque sur chaque canvas
+const drawMosaicToCanvases = () => {
+  if (!mosaicImg.value || !mosaicImg.value.complete) return;
+  
+  for (const camera of filteredCameras.value) {
+    const canvas = cameraCanvases.value[camera.optionValue];
+    const rect = cameraRects.value[camera.optionValue];
+    
+    if (canvas && rect) {
+      const ctx = canvas.getContext('2d');
+      try {
+        // Dessiner la portion de l'image mosaïque
+        ctx.drawImage(
+          mosaicImg.value,
+          rect.x, rect.y, rect.width, rect.height, // Source
+          0, 0, canvas.width, canvas.height         // Destination
+        );
+      } catch (err) {
+        console.error(`Failed to draw camera ${camera.optionValue}:`, err);
+      }
+    } else if (canvas && !rect) {
+      // Si pas de rectangle trouvé, afficher un message
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#666';
+      ctx.font = '12px Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText(`Caméra ${camera.optionValue}`, canvas.width / 2, canvas.height / 2 - 10);
+      ctx.fillText('non trouvée dans mosaïque', canvas.width / 2, canvas.height / 2 + 10);
+    }
+  }
+};
+
+// Mettre à jour le stream d'une caméra en trouvant le bon clip
 const updateCameraStream = async (cameraId) => {
   const canvas = cameraCanvases.value[cameraId];
   if (!canvas) return;
   
-  const ctx = canvas.getContext('2d');
+  // Si on est en mode live, la mosaïque gère tout
+  if (isLive.value) {
+    return; // Ne rien faire - startMosaicStream() gère le live
+  }
   
-  // Calculer le timestamp Unix du moment visé (en secondes)
-  const dayStart = new Date(selectedDate.value);
-  dayStart.setHours(0, 0, 0, 0);
+  // Mode historique : charger l'image du clip à ce moment précis
+  const [year, month, day] = selectedDate.value.split('-').map(Number);
+  const dayStart = new Date(year, month - 1, day, 0, 0, 0, 0);
   const targetTimestamp = Math.floor((dayStart.getTime() + currentTimeMs.value) / 1000);
   
-  // **SOLUTION SIMPLE** : Demander directement une frame à Blue Iris pour ce timestamp
-  // Blue Iris sait lui-même quel clip (ou partie de clip) correspond à ce moment
-  // On utilise l'API /image qui accepte un timestamp pour les enregistrements historiques
+  // Trouver le clip qui contient ce timestamp
+  const clip = dayEvents.value.find(event => {
+    if (event.camera !== cameraId) return false;
+    const clipStart = event.date;
+    const clipEnd = clipStart + (event.msec / 1000);
+    return targetTimestamp >= clipStart && targetTimestamp <= clipEnd;
+  });
   
-  // Format: /image/camera?time=timestamp&h=height&session=...
-  const frameUrl = `/image/${encodeURIComponent(cameraId)}?time=${targetTimestamp}&h=180&cache=1&session=${authStore.apiClient.session}`;
+  const ctx = canvas.getContext('2d');
   
-  const img = new Image();
-  img.onload = () => {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-    // Retirer tout overlay - l'image est valide
-  };
-  img.onerror = () => {
-    // Si erreur: soit la caméra n'avait pas de vidéo à ce moment, soit erreur réseau
-    // Afficher un fond noir avec texte "Pas d'enregistrement"
+  if (!clip) {
+    // Pas de clip - afficher fond noir avec texte
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = '#666';
-    ctx.font = '12px Arial';
+    ctx.font = '14px Arial';
     ctx.textAlign = 'center';
-    ctx.fillText('Pas d\'enregistrement', canvas.width / 2, canvas.height / 2);
+    ctx.fillText("Pas d'enregistrement", canvas.width / 2, canvas.height / 2);
+    return;
+  }
+  
+  // Calculer l'offset dans le clip (en ms)
+  const offsetSeconds = targetTimestamp - clip.date;
+  const offsetMs = Math.max(0, offsetSeconds * 1000);
+  
+  // Charger l'image depuis le clip à cette position
+  const frameUrl = `/file/clips/${clip.path}?pos=${offsetMs}&session=${authStore.apiClient.session}&_t=${Date.now()}`;
+  
+  // Charger l'image et la dessiner sur le canvas
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.onload = () => {
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  };
+  img.onerror = () => {
+    // En cas d'erreur, afficher un message
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#666';
+    ctx.font = '14px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText("Erreur de chargement", canvas.width / 2, canvas.height / 2);
   };
   img.src = frameUrl;
 };
@@ -569,26 +1148,221 @@ watch(selectedDate, () => {
   loadDayEvents();
 });
 
+// Mettre à jour seulement si on n'est pas en lecture (sinon c'est fait dans updatePlayback)
 watch(cursorPosition, () => {
-  updateAllStreams();
+  // Mettre à jour automatiquement isLive basé sur la position du curseur
+  const now = new Date();
+  const [year, month, day] = selectedDate.value.split('-').map(Number);
+  const dayStart = new Date(year, month - 1, day, 0, 0, 0, 0);
+  const cursorMs = dayStart.getTime() + currentTimeMs.value;
+  const diffMs = now.getTime() - cursorMs;
+  
+  // Si aujourd'hui et proche de maintenant (< 5 secondes dans le futur, < 2 secondes dans le passé)
+  const isToday = selectedDate.value === getLocalDateString();
+  const wasLive = isLive.value;
+  
+  if (isToday && diffMs < 5000 && diffMs > -2000) {
+    isLive.value = true;
+  } else {
+    isLive.value = false;
+  }
+  
+  // Logger le changement de mode
+  if (wasLive !== isLive.value) {
+    console.log(`🔄 Mode changed: ${wasLive ? 'LIVE' : 'HISTORICAL'} → ${isLive.value ? 'LIVE' : 'HISTORICAL'}`);
+  }
+  
+  // Mettre à jour la mosaïque seulement si en pause
+  if (!isPlaying.value) {
+    updateAllStreams();
+  }
+  
+  // Mettre à jour le stream fullscreen SEULEMENT si en pause (seek manuel)
+  // Pendant la lecture, le stream continue naturellement sans redémarrage
+  if (fullscreenCamera.value && !isPlaying.value) {
+    if (fullscreenSeekDebounceTimeout) {
+      clearTimeout(fullscreenSeekDebounceTimeout);
+    }
+    fullscreenSeekDebounceTimeout = setTimeout(() => {
+      console.log('🔄 Updating fullscreen stream at position:', formatCursorTime.value, '- Mode:', isLive.value ? 'LIVE' : 'HISTORICAL');
+      startFullscreenStream();
+    }, 300);
+  }
 });
 
 watch(filteredCameras, () => {
   nextTick(() => {
+    // Initialiser les dimensions des nouveaux canvas
+    for (const camera of filteredCameras.value) {
+      const canvas = cameraCanvases.value[camera.optionValue];
+      if (canvas && (!canvas.width || canvas.width === 0)) {
+        canvas.width = 320;
+        canvas.height = 180;
+      }
+    }
     updateAllStreams();
   });
 });
+
+// Plein écran pour une caméra
+const openFullscreenCamera = (cameraId) => {
+  // Forcer la mise à jour du mode LIVE/HISTORICAL avant d'ouvrir
+  const now = new Date();
+  const [year, month, day] = selectedDate.value.split('-').map(Number);
+  const dayStart = new Date(year, month - 1, day, 0, 0, 0, 0);
+  const cursorMs = dayStart.getTime() + currentTimeMs.value;
+  const diffMs = now.getTime() - cursorMs;
+  
+  const isToday = selectedDate.value === getLocalDateString();
+  
+  if (isToday && diffMs < 5000 && diffMs > -2000) {
+    isLive.value = true;
+  } else {
+    isLive.value = false;
+  }
+  
+  console.log(`📸 Opening fullscreen for ${cameraId} - Mode: ${isLive.value ? 'LIVE' : 'HISTORICAL'}, diffMs: ${diffMs.toFixed(0)}`);
+  
+  fullscreenCamera.value = cameraId;
+  nextTick(() => {
+    startFullscreenStream();
+  });
+};
+
+const closeFullscreenCamera = () => {
+  stopFullscreenStream();
+  fullscreenCamera.value = null;
+};
+
+const startFullscreenStream = async () => {
+  stopFullscreenStream();
+  
+  if (!fullscreenCamera.value) return;
+  
+  const cameraId = fullscreenCamera.value;
+  let streamUrl;
+  
+  if (isLive.value) {
+    // Mode LIVE pour une caméra
+    streamUrl = `/video/${cameraId}/2.0?session=${authStore.apiClient.session}&audio=0&stream=0&w=1920&h=1080&q=23&kbps=1000&gop=1000&zfl=1&preset=1&vcs=3&rc=0&extend=2`;
+    console.log('🔴 Fullscreen LIVE mode for', cameraId);
+  } else {
+    // Mode historique pour une caméra
+    const [year, month, day] = selectedDate.value.split('-').map(Number);
+    const dayStart = new Date(year, month - 1, day, 0, 0, 0, 0);
+    const posMs = dayStart.getTime() + currentTimeMs.value;
+    streamUrl = `/time/${cameraId}?session=${authStore.apiClient.session}&pos=${posMs}&audio=0&stream=0&w=1920&h=1080&q=23&kbps=1000&gop=1000&zfl=1&preset=1&vcs=3&rc=0&speed=${streamSpeed.value}&extend=2`;
+    console.log('⏱️ Fullscreen HISTORICAL mode for', cameraId, 'at', formatCursorTime.value, '(pos:', posMs, ') - speed:', streamSpeed.value);
+  }
+  
+  console.log('🎬 Starting fullscreen stream for', cameraId, ':', streamUrl);
+  
+  // Créer l'élément vidéo
+  fullscreenVideo = document.getElementById('fullscreen-video');
+  if (!fullscreenVideo) return;
+  
+  // Parser Blue Iris
+  fullscreenParser = new BlueIrisParser(
+    (frame) => {
+      if (!fullscreenJmuxer) {
+        fullscreenJmuxer = new JMuxer({
+          node: fullscreenVideo,
+          mode: 'video',
+          videoCodec: frame.codec,
+          debug: false,
+          onReady: () => {
+            fullscreenVideo.play().catch(err => console.error('❌ Fullscreen play error:', err));
+          }
+        });
+      }
+      fullscreenJmuxer.feed({ video: frame.frameData });
+    },
+    () => {},
+    (bitmapHeader, audioHeader) => {
+      console.log('📊 Fullscreen stream info:', bitmapHeader ? `${bitmapHeader.biWidth}x${bitmapHeader.biHeight}` : 'none');
+    },
+    () => {}
+  );
+  
+  // Démarrer le fetch
+  fullscreenAbortController = new AbortController();
+  
+  try {
+    const response = await fetch(streamUrl, {
+      signal: fullscreenAbortController.signal
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    
+    const reader = response.body.getReader();
+    
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      
+      fullscreenParser.write(value);
+      fullscreenParser.parse();
+    }
+  } catch (error) {
+    if (error.name !== 'AbortError') {
+      console.error('❌ Fullscreen stream error:', error);
+    }
+  }
+};
+
+const stopFullscreenStream = () => {
+  if (fullscreenSeekDebounceTimeout) {
+    clearTimeout(fullscreenSeekDebounceTimeout);
+    fullscreenSeekDebounceTimeout = null;
+  }
+  
+  if (fullscreenAbortController) {
+    fullscreenAbortController.abort();
+    fullscreenAbortController = null;
+  }
+  
+  if (fullscreenJmuxer) {
+    fullscreenJmuxer.destroy();
+    fullscreenJmuxer = null;
+  }
+  
+  fullscreenParser = null;
+};
 
 // Lifecycle
 onMounted(async () => {
   await camerasStore.fetchCameras();
   await loadDayEvents();
-  updateAllStreams();
+  
+  // Initialiser les dimensions des canvas
+  nextTick(() => {
+    for (const camera of filteredCameras.value) {
+      const canvas = cameraCanvases.value[camera.optionValue];
+      if (canvas) {
+        canvas.width = 320;
+        canvas.height = 180;
+      }
+    }
+    // Démarrer le stream et la lecture automatiquement
+    updateAllStreams();
+    startPlayback();
+  });
 });
 
 onUnmounted(() => {
   // Cleanup playback
   stopPlayback();
+  
+  // Cleanup live updates
+  if (liveUpdateInterval) {
+    clearInterval(liveUpdateInterval);
+    liveUpdateInterval = null;
+  }
+  
+  // Cleanup mosaic stream
+  stopMosaicStream();
 });
 </script>
 
@@ -709,6 +1483,8 @@ onUnmounted(() => {
   background: var(--color-surface);
   border-top: 2px solid var(--color-border);
   padding: var(--spacing-sm) var(--spacing-md);
+  position: relative;
+  z-index: 20;
 }
 
 /* Contrôles de lecture */
@@ -717,6 +1493,43 @@ onUnmounted(() => {
   align-items: center;
   gap: var(--spacing-md);
   margin-bottom: var(--spacing-sm);
+}
+
+.btn-live {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text);
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+  transition: var(--transition);
+}
+
+.btn-live svg {
+  width: 16px;
+  height: 16px;
+}
+
+.btn-live:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.btn-live.active {
+  background: #e74c3c;
+  border-color: #e74c3c;
+  color: white;
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
 }
 
 .btn-play {
@@ -909,5 +1722,65 @@ onUnmounted(() => {
   font-weight: 600;
   white-space: nowrap;
   box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+/* Vue plein écran pour une caméra */
+.fullscreen-camera {
+  flex: 1;
+  background: #000;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.fullscreen-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.8);
+  color: white;
+}
+
+.fullscreen-header h2 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.btn-close {
+  background: transparent;
+  border: none;
+  color: white;
+  cursor: pointer;
+  padding: 0.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.2s;
+}
+
+.btn-close:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+
+.btn-close svg {
+  width: 24px;
+  height: 24px;
+}
+
+.fullscreen-video-container {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.fullscreen-video-container video {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
 }
 </style>

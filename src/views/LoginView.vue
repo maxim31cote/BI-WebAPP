@@ -55,12 +55,13 @@
 
 <script setup>
 import { ref, onMounted } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRouter, useRoute } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { useAuthStore } from '../stores/auth';
 
 const { t } = useI18n();
 const router = useRouter();
+const route = useRoute();
 const authStore = useAuthStore();
 
 const form = ref({
@@ -97,7 +98,10 @@ const handleLogin = async () => {
   const result = await authStore.login(form.value);
 
   if (result.success) {
-    router.push('/live');
+    // Rediriger vers la page demandée ou /live par défaut
+    const redirectPath = route.query.redirect || '/live';
+    console.log('🔐 Login successful, redirecting to:', redirectPath);
+    router.push(redirectPath);
   } else {
     error.value = result.error || t('login.error');
   }

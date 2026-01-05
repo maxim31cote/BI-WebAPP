@@ -35,6 +35,23 @@ const routes = [
     name: 'Settings',
     component: () => import('../views/SettingsView.vue'),
     meta: { requiresAuth: true }
+  },
+  {
+    path: '/login.htm',
+    redirect: (to) => {
+      // Blue Iris redirige vers /login.htm?page=/timeline ou /clips quand la session expire
+      // Extraire le paramètre 'page' et rediriger vers la bonne route Vue
+      const targetPage = to.query.page;
+      if (targetPage) {
+        console.log('🔀 Redirecting from /login.htm to:', targetPage);
+        // Rediriger vers la page demandée sans conserver les query params
+        return { path: targetPage, query: {} };
+      } else {
+        // Par défaut, aller au login
+        console.log('🔀 No page param, redirecting to /login');
+        return '/login';
+      }
+    }
   }
 ];
 
@@ -48,9 +65,15 @@ router.beforeEach((to, from, next) => {
   const authStore = useAuthStore();
   
   if (to.meta.requiresAuth && !authStore.isAuthenticated) {
-    next({ name: 'Login' });
+    // Sauvegarder la route de destination pour y retourner après login
+    next({ 
+      name: 'Login',
+      query: { redirect: to.fullPath }
+    });
   } else if (to.name === 'Login' && authStore.isAuthenticated) {
-    next({ name: 'Live' });
+    // Si déjà authentifié et on va vers Login, rediriger vers la page demandée ou Live
+    const redirectPath = to.query.redirect || '/live';
+    next(redirectPath);
   } else {
     next();
   }
