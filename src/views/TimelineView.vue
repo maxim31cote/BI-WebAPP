@@ -337,6 +337,13 @@
           :title="`${event.camera} - ${event.memo || 'Motion'}`"
         ></div>
         
+        <!-- Zone future (non accessible) -->
+        <div 
+          v-if="futureZonePosition !== null" 
+          class="future-zone" 
+          :style="{ left: futureZonePosition + '%', width: (100 - futureZonePosition) + '%' }"
+        ></div>
+        
         <!-- Curseur de position -->
         <div class="timeline-cursor" :style="{ left: cursorDisplayPosition + '%' }" v-show="cursorDisplayPosition >= 0">
           <div class="cursor-handle"></div>
@@ -692,6 +699,28 @@ const toggleCameraVisibility = (cameraId) => {
   saveHiddenCameras();
 };
 
+// Charger la sélection des caméras depuis localStorage
+const loadSelectedCameras = () => {
+  const userId = authStore.user?.username || 'default';
+  const saved = localStorage.getItem(`timeline-selected-cameras_${userId}`);
+  if (saved) {
+    try {
+      const selected = JSON.parse(saved);
+      visibleCameras.value = new Set(selected);
+    } catch (e) {
+      console.error('Error loading selected cameras:', e);
+      visibleCameras.value = new Set();
+    }
+  }
+};
+
+// Sauvegarder la sélection des caméras dans localStorage
+const saveSelectedCameras = () => {
+  const userId = authStore.user?.username || 'default';
+  const selected = Array.from(visibleCameras.value);
+  localStorage.setItem(`timeline-selected-cameras_${userId}`, JSON.stringify(selected));
+};
+
 // Caméras filtrées pour affichage
 const filteredCameras = computed(() => {
   let cameras = visibleCameras.value.size === 0 
@@ -935,6 +964,25 @@ const cursorDisplayPosition = computed(() => {
   return 50;
 });
 
+// Position de la zone future (non accessible) dans la timeline
+const futureZonePosition = computed(() => {
+  const now = Date.now();
+  const range = visibleRange.value;
+  
+  // Si la zone visible ne contient pas de futur, pas besoin d'afficher
+  if (now < range.startMs) {
+    return null; // Tout est dans le passé
+  }
+  
+  if (now > range.endMs) {
+    return null; // Tout est déjà passé
+  }
+  
+  // Calculer la position du "maintenant" dans la timeline visible
+  const position = ((now - range.startMs) / range.durationMs) * 100;
+  return Math.max(0, Math.min(100, position));
+});
+
 // Formattage du temps du curseur
 const formatCursorTime = computed(() => {
   const ms = Math.max(0, currentTimeMs.value); // S'assurer que ms est toujours >= 0
@@ -962,6 +1010,7 @@ const nextDay = () => {
 // Filtres de caméras
 const showAllCameras = () => {
   visibleCameras.value.clear();
+  saveSelectedCameras();
 };
 
 const toggleCamera = (cameraId) => {
@@ -970,6 +1019,7 @@ const toggleCamera = (cameraId) => {
   } else {
     visibleCameras.value.add(cameraId);
   }
+  saveSelectedCameras();
 };
 
 // Charger les événements de la journée (alertes + enregistrements continus)
@@ -1223,16 +1273,23 @@ const goLive = () => {
   // Activer le mode live
   isLive.value = true;
   
-  // Arrêter la lecture normale
-  if (isPlaying.value) {
-    stopPlayback();
+  // Remettre en lecture si on était en pause
+  if (!isPlaying.value) {
+    isPlaying.value = true;
   }
   
-  // Pas besoin d'interval en mode live - on utilise MJPEG
+  // Arrêter la lecture normale
+  stopPlayback();
+  
+  // Démarrer l'interval pour mettre à jour le timestamp en mode live
   if (liveUpdateInterval) {
     clearInterval(liveUpdateInterval);
-    liveUpdateInterval = null;
   }
+  liveUpdateInterval = setInterval(() => {
+    if (isLive.value) {
+      viewportCenterTimestamp.value = Date.now();
+    }
+  }, 1000); // Mettre à jour chaque seconde
   
   // Mise à jour immédiate pour passer en MJPEG
   updateAllStreams();
@@ -1582,7 +1639,13 @@ const seekToTimeRelative = (currentX) => {
   
   // DRAG = déplacer le VIEWPORT (scroller la timeline), pas le curseur
   // Inverser le delta pour un comportement intuitif (drag vers la droite = scroll vers la gauche)
-  const newTimestamp = dragStartTimestamp - deltaMs;
+  let newTimestamp = dragStartTimestamp - deltaMs;
+  
+  // Si au-delà d'aujourd'hui, limiter à maintenant
+  const now = Date.now();
+  if (newTimestamp > now) {
+    newTimestamp = now;
+  }
   
   // Mettre à jour le timestamp directement - plus besoin de normalisation !
   viewportCenterTimestamp.value = newTimestamp;
@@ -1603,15 +1666,6 @@ const seekToTime = (e) => {
     return;
   }
   
-  // Désactiver le mode live si on déplace le curseur
-  if (isLive.value) {
-    isLive.value = false;
-    if (liveUpdateInterval) {
-      clearInterval(liveUpdateInterval);
-      liveUpdateInterval = null;
-    }
-  }
-  
   const rect = timelineTrack.value.getBoundingClientRect();
   // Support pour touch et mouse events
   const clientX = e.touches ? e.touches[0].clientX : e.clientX;
@@ -1627,8 +1681,19 @@ const seekToTime = (e) => {
   
   // Si au-delà d'aujourd'hui, limiter à maintenant
   const now = Date.now();
-  if (newTimestamp > now) {
-    newTimestamp = now;
+  const clickedInFuture = newTimestamp > now;
+  if (clickedInFuture) {
+    // Ne rien faire si on clique dans le futur - garder le mode live actif
+    return;
+  }
+  
+  // Désactiver le mode live si on déplace le curseur dans le passé
+  if (isLive.value) {
+    isLive.value = false;
+    if (liveUpdateInterval) {
+      clearInterval(liveUpdateInterval);
+      liveUpdateInterval = null;
+    }
   }
   
   // Déplacer le viewport
@@ -2512,6 +2577,44 @@ const stopFullscreenStream = () => {
   }
 };
 
+// Gestion de l'affichage de la timeline en fullscreen
+let hideTimelineTimeout = null;
+let lastMouseY = 0;
+
+const handleMouseMove = (e) => {
+  if (fullscreenCamera.value) {
+    const mouseY = e.clientY;
+    const windowHeight = window.innerHeight;
+    
+    // Afficher les contrôles si la souris est en haut (20%) ou en bas (80%) de l'écran
+    if (mouseY < windowHeight * 0.2 || mouseY > windowHeight * 0.8) {
+      showTimelineBar.value = true;
+      
+      // Masquer après 3 secondes d'inactivité
+      if (hideTimelineTimeout) clearTimeout(hideTimelineTimeout);
+      hideTimelineTimeout = setTimeout(() => {
+        showTimelineBar.value = false;
+      }, 3000);
+    }
+    
+    lastMouseY = mouseY;
+  }
+};
+
+const handleTouch = (e) => {
+  if (fullscreenCamera.value) {
+    showTimelineBar.value = !showTimelineBar.value;
+    
+    // Masquer après 3 secondes si visible
+    if (showTimelineBar.value) {
+      if (hideTimelineTimeout) clearTimeout(hideTimelineTimeout);
+      hideTimelineTimeout = setTimeout(() => {
+        showTimelineBar.value = false;
+      }, 3000);
+    }
+  }
+};
+
 // Lifecycle
 onMounted(async () => {
   await camerasStore.fetchCameras();
@@ -2534,6 +2637,7 @@ onMounted(async () => {
   // Charger l'ordre des caméras et les caméras masquées
   loadCameraOrder();
   loadHiddenCameras();
+  loadSelectedCameras();
   
   // Démarrer le polling des infos système
   updateServerStatus();
@@ -2542,44 +2646,7 @@ onMounted(async () => {
   // Gérer le bouton retour pour fermer le fullscreen
   window.addEventListener('popstate', handleBackButton);
   
-  // Gestion de l'affichage de la timeline en fullscreen
-  let hideTimelineTimeout = null;
-  let lastMouseY = 0;
-  
-  const handleMouseMove = (e) => {
-    if (fullscreenCamera.value) {
-      const mouseY = e.clientY;
-      const windowHeight = window.innerHeight;
-      
-      // Afficher les contrôles si la souris est en haut (20%) ou en bas (80%) de l'écran
-      if (mouseY < windowHeight * 0.2 || mouseY > windowHeight * 0.8) {
-        showTimelineBar.value = true;
-        
-        // Masquer après 3 secondes d'inactivité
-        if (hideTimelineTimeout) clearTimeout(hideTimelineTimeout);
-        hideTimelineTimeout = setTimeout(() => {
-          showTimelineBar.value = false;
-        }, 3000);
-      }
-      
-      lastMouseY = mouseY;
-    }
-  };
-  
-  const handleTouch = (e) => {
-    if (fullscreenCamera.value) {
-      showTimelineBar.value = !showTimelineBar.value;
-      
-      // Masquer après 3 secondes si visible
-      if (showTimelineBar.value) {
-        if (hideTimelineTimeout) clearTimeout(hideTimelineTimeout);
-        hideTimelineTimeout = setTimeout(() => {
-          showTimelineBar.value = false;
-        }, 3000);
-      }
-    }
-  };
-  
+  // Event listeners pour l'affichage de la timeline en fullscreen
   window.addEventListener('mousemove', handleMouseMove);
   window.addEventListener('touchstart', handleTouch);
 });
@@ -3956,6 +4023,22 @@ body:has(.fullscreen-camera) .timeline-bar {
   cursor: pointer;
   overflow: hidden; /* Empêcher le débordement des événements et curseur hors vue */
   touch-action: none;
+}
+
+.future-zone {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  background: repeating-linear-gradient(
+    45deg,
+    rgba(100, 100, 100, 0.15),
+    rgba(100, 100, 100, 0.15) 10px,
+    rgba(80, 80, 80, 0.1) 10px,
+    rgba(80, 80, 80, 0.1) 20px
+  );
+  pointer-events: none;
+  z-index: 5;
+  border-left: 2px solid rgba(150, 150, 150, 0.3);
 }
 
 @media (max-width: 768px) {

@@ -8,11 +8,11 @@
     
     <!-- Navigation bar (caché sur login) -->
     <nav class="bottom-nav" v-if="showNavigation">
-      <router-link to="/live" class="nav-item" :class="{ active: route.name === 'Live' }">
+      <router-link to="/timeline" class="nav-item" :class="{ active: route.name === 'Timeline' }">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
         </svg>
-        <span>{{ t('nav.live') }}</span>
+        <span>{{ t('nav.timeline') }}</span>
       </router-link>
 
       <router-link to="/clips" class="nav-item" :class="{ active: route.name === 'Clips' }">
@@ -22,11 +22,11 @@
         <span>{{ t('nav.clips') }}</span>
       </router-link>
 
-      <router-link to="/timeline" class="nav-item" :class="{ active: route.name === 'Timeline' }">
+      <router-link to="/live" class="nav-item" :class="{ active: route.name === 'Live' }">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
         </svg>
-        <span>{{ t('nav.timeline') }}</span>
+        <span>Direct</span>
       </router-link>
 
       <router-link to="/settings" class="nav-item" :class="{ active: route.name === 'Settings' }">

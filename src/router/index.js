@@ -10,7 +10,7 @@ const routes = [
   },
   {
     path: '/',
-    redirect: '/live'
+    redirect: '/timeline'
   },
   {
     path: '/live',
