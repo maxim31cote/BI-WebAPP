@@ -1,12 +1,27 @@
 <template>
   <div class="clips-view">
     <div class="header">
-      <h1>{{ t('clips.title') }}</h1>
-      <button @click="loadClips" class="btn-icon">
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-        </svg>
-      </button>
+      <div class="header-top">
+        <div class="header-left">
+          <h1>{{ t('clips.title') }}</h1>
+        </div>
+        <div class="header-right">
+          <div class="system-info" v-if="serverStatus">
+            <div class="info-item">
+              <span class="info-label">CPU:</span>
+              <span class="info-value">{{ serverStatus.cpu }}%</span>
+            </div>
+            <div class="info-item">
+              <span class="info-label">RAM:</span>
+              <span class="info-value">{{ serverStatus.mem }}</span>
+            </div>
+            <div class="info-item">
+              <span class="info-label">GPU:</span>
+              <span class="info-value">{{ serverStatus.gpu }}%</span>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div class="filters">
@@ -174,7 +189,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, nextTick, watch } from 'vue';
+import { ref, computed, onMounted, nextTick, watch, onUnmounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useAuthStore } from '../stores/auth';
 import { useCamerasStore } from '../stores/cameras';
@@ -184,6 +199,25 @@ import JMuxer from '../utils/jmuxer-wrapper';
 const { t } = useI18n();
 const authStore = useAuthStore();
 const camerasStore = useCamerasStore();
+
+// Infos système
+const serverStatus = ref({
+  cpu: 0,
+  mem: 0,
+  gpu: 0
+});
+let statusUpdateInterval = null;
+
+const updateServerStatus = async () => {
+  const result = await authStore.apiClient.getStatus();
+  if (result.success && result.status) {
+    serverStatus.value = {
+      cpu: result.status.cpu || 0,
+      mem: result.status.mem || 0,
+      gpu: result.status.gpu || 0
+    };
+  }
+};
 
 const clips = ref([]);
 const loading = ref(false);
@@ -695,6 +729,18 @@ onMounted(async () => {
   console.log('📹 First camera structure:', camerasStore.cameras[0]);
   
   loadClips();
+  
+  // Démarrer le polling des infos système
+  updateServerStatus();
+  statusUpdateInterval = setInterval(updateServerStatus, 2000);
+});
+
+onUnmounted(() => {
+  // Arrêter le polling
+  if (statusUpdateInterval) {
+    clearInterval(statusUpdateInterval);
+    statusUpdateInterval = null;
+  }
 });
 </script>
 
@@ -707,16 +753,72 @@ onMounted(async () => {
 
 .header {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
+  gap: var(--spacing-sm);
   padding: var(--spacing-xs) var(--spacing-md);
   background: var(--color-surface);
   border-bottom: 1px solid var(--color-border);
 }
 
-.header h1 {
-  font-size: 18px;
+.header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.header-left h1 {
   margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.system-info {
+  display: flex;
+  gap: var(--spacing-md);
+  align-items: center;
+}
+
+.info-item {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  font-size: 11px;
+}
+
+.info-label {
+  color: var(--color-text-secondary);
+  font-weight: 500;
+}
+
+.info-value {
+  color: var(--color-accent);
+  font-weight: 600;
+}
+
+@media (max-width: 480px) {
+  .header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--spacing-sm);
+  }
+  
+  .system-info {
+    width: 100%;
+    justify-content: space-between;
+  }
 }
 
 .filters {

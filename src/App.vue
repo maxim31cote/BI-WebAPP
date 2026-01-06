@@ -45,13 +45,18 @@ import { computed, onMounted } from 'vue';
 import { useRoute } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { useSettingsStore } from './stores/settings';
+import { useFullscreen } from './composables/useFullscreen';
 
 const route = useRoute();
 const { t } = useI18n();
 const settingsStore = useSettingsStore();
 
+// Utiliser le composable partagé pour l'état fullscreen
+const { fullscreenCamera, isEditMode } = useFullscreen();
+
 const showNavigation = computed(() => {
-  return route.name !== 'Login';
+  // Cacher la navbar sur la page de login, en mode fullscreen, et en mode édition
+  return route.name !== 'Login' && !fullscreenCamera.value && !isEditMode.value;
 });
 
 onMounted(() => {

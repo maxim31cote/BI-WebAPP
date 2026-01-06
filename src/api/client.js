@@ -224,6 +224,26 @@ class BlueIrisAPI {
     }
   }
 
+  async setManualRecording(camera, enabled) {
+    try {
+      const response = await this.client.post('/json', {
+        cmd: 'camconfig',
+        camera: camera,
+        manrec: enabled,
+        session: this.session
+      });
+
+      return {
+        success: response.data.result === 'success'
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
   getStreamURL(camera, quality = 'high', audio = true) {
     // vcs=3 : Codec natif (H.264 ou H.265) avec protocol Blue Iris
     // Notre JMuxer modifié (de UI3) supporte H.265 !

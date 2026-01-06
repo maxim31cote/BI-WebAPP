@@ -2,23 +2,25 @@
   <div class="live-view">
     <!-- Header avec server info -->
     <div class="header">
-      <h1>{{ t('live.title') }}</h1>
-      <div class="server-info" v-if="serverStatus">
-        <div class="info-item">
-          <span class="label">{{ t('server.cpu') }}</span>
-          <span class="value" :class="getStatusClass(serverStatus.cpu)">
-            {{ serverStatus.cpu }}%
-          </span>
+      <div class="header-top">
+        <div class="header-left">
+          <h1>{{ t('live.title') }}</h1>
         </div>
-        <div class="info-item">
-          <span class="label">{{ t('server.memory') }}</span>
-          <span class="value" :class="getStatusClass(serverStatus.mem)">
-            {{ serverStatus.mem }}%
-          </span>
-        </div>
-        <div class="info-item">
-          <span class="label">{{ t('server.fps') }}</span>
-          <span class="value">{{ serverStatus.fps }}</span>
+        <div class="header-right">
+          <div class="system-info" v-if="serverStatus">
+            <div class="info-item">
+              <span class="info-label">CPU:</span>
+              <span class="info-value">{{ serverStatus.cpu }}%</span>
+            </div>
+            <div class="info-item">
+              <span class="info-label">RAM:</span>
+              <span class="info-value">{{ serverStatus.mem }}</span>
+            </div>
+            <div class="info-item">
+              <span class="info-label">GPU:</span>
+              <span class="info-value">{{ serverStatus.gpu || 0 }}%</span>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -257,6 +259,7 @@ const updateServerStatus = async () => {
     serverStatus.value = {
       cpu: result.status.cpu || 0,
       mem: result.status.mem || 0,
+      gpu: result.status.gpu || 0,
       fps: result.status.fps || 0
     };
   }
@@ -684,45 +687,74 @@ onUnmounted(() => {
 }
 
 .header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
   padding: var(--spacing-xs) var(--spacing-md);
   background: var(--color-surface);
   border-bottom: 1px solid var(--color-border);
+}
+
+.header-top {
   display: flex;
   align-items: center;
-  gap: var(--spacing-lg);
+  justify-content: space-between;
+  width: 100%;
 }
 
-.header h1 {
-  font-size: 18px;
+.header-left {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.header-left h1 {
   margin: 0;
+  font-size: 16px;
+  font-weight: 600;
 }
 
-.server-info {
+.header-right {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.system-info {
   display: flex;
   gap: var(--spacing-md);
-  font-size: 11px;
-  opacity: 0.8;
+  align-items: center;
 }
 
 .info-item {
   display: flex;
   align-items: center;
-  gap: 4px;
-}
-
-.info-item .label {
-  color: var(--color-text-secondary);
-  font-size: 10px;
-}
-
-.info-item .value {
-  font-weight: 600;
+  gap: var(--spacing-xs);
   font-size: 11px;
 }
 
-.info-item .value.good { color: var(--color-success); }
-.info-item .value.warning { color: var(--color-warning); }
-.info-item .value.critical { color: var(--color-error); }
+.info-label {
+  color: var(--color-text-secondary);
+  font-weight: 500;
+}
+
+.info-value {
+  color: var(--color-accent);
+  font-weight: 600;
+}
+
+@media (max-width: 480px) {
+  .header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--spacing-sm);
+  }
+  
+  .system-info {
+    width: 100%;
+    justify-content: space-between;
+  }
+}
 
 .camera-container {
   flex: 1;

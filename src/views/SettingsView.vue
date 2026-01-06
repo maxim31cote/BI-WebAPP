@@ -1,7 +1,27 @@
 <template>
   <div class="settings-view">
     <div class="header">
-      <h1>{{ t('settings.title') }}</h1>
+      <div class="header-top">
+        <div class="header-left">
+          <h1>{{ t('settings.title') }}</h1>
+        </div>
+        <div class="header-right">
+          <div class="system-info" v-if="serverStatus">
+            <div class="info-item">
+              <span class="info-label">CPU:</span>
+              <span class="info-value">{{ serverStatus.cpu }}%</span>
+            </div>
+            <div class="info-item">
+              <span class="info-label">RAM:</span>
+              <span class="info-value">{{ serverStatus.mem }}</span>
+            </div>
+            <div class="info-item">
+              <span class="info-label">GPU:</span>
+              <span class="info-value">{{ serverStatus.gpu }}%</span>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div class="settings-container">
@@ -92,7 +112,7 @@
 </template>
 
 <script setup>
-import { ref } from 'vue';
+import { ref, onMounted, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { useAuthStore } from '../stores/auth';
@@ -104,6 +124,21 @@ const authStore = useAuthStore();
 const settingsStore = useSettingsStore();
 
 const language = ref(locale.value);
+
+// System info
+const serverStatus = ref({ cpu: 0, mem: 0, gpu: 0 });
+let statusUpdateInterval = null;
+
+const updateServerStatus = async () => {
+  const result = await authStore.apiClient.getStatus();
+  if (result.success && result.status) {
+    serverStatus.value = {
+      cpu: result.status.cpu || 0,
+      mem: result.status.mem || 0,
+      gpu: result.status.gpu || 0
+    };
+  }
+};
 
 const themes = [
   { value: 'dark', label: 'Dark' },
@@ -136,6 +171,18 @@ const handleLogout = async () => {
     router.push('/login');
   }
 };
+
+onMounted(() => {
+  updateServerStatus();
+  statusUpdateInterval = setInterval(updateServerStatus, 2000);
+});
+
+onUnmounted(() => {
+  if (statusUpdateInterval) {
+    clearInterval(statusUpdateInterval);
+    statusUpdateInterval = null;
+  }
+});
 </script>
 
 <style scoped>
@@ -146,13 +193,60 @@ const handleLogout = async () => {
 }
 
 .header {
-  padding: var(--spacing-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-xs) var(--spacing-md);
   background: var(--color-surface);
   border-bottom: 1px solid var(--color-border);
 }
 
-.header h1 {
-  font-size: 20px;
+.header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.header-left h1 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.system-info {
+  display: flex;
+  gap: var(--spacing-md);
+  align-items: center;
+}
+
+.info-item {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  font-size: 11px;
+}
+
+.info-label {
+  color: var(--color-text-secondary);
+  font-weight: 500;
+}
+
+.info-value {
+  color: var(--color-accent);
+  font-weight: 600;
 }
 
 .settings-container {
@@ -242,6 +336,17 @@ const handleLogout = async () => {
 }
 
 @media (max-width: 480px) {
+  .header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--spacing-sm);
+  }
+  
+  .system-info {
+    width: 100%;
+    justify-content: space-between;
+  }
+  
   .setting-item {
     flex-direction: column;
     align-items: flex-start;
